@@ -1,137 +1,101 @@
 # Token Bubble 余量浮窗
 
-Lightweight floating desktop widget for checking Codex quota from the local Codex Desktop login state.
+**简体中文** · [English](README.en.md)
 
-Token Bubble 基于 **Quota Float** 开发，并集成了 **CodexScope** 的本地用量验证功能。原项目版权及许可证归各自作者所有；详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+Token Bubble 是一个本地优先的 Codex 额度与 Token 用量桌面浮窗。它将额度、Token 分布、估算花费和近期用量放在一个可调整、可固定的轻量面板中。
 
-Token Bubble is derived from **Quota Float** and integrates **CodexScope** for local usage verification. The original projects retain their respective copyrights and licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Token Bubble 基于 **Quota Float** 开发，并集成 **CodexScope** 的本地用量验证功能。原项目版权及许可证归各自作者所有，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-![Token Bubble quota states](docs/images/quota-states.png)
+## 下载
 
-## Highlights
+- [下载最新版安装包](https://github.com/h17612764275-cloud/token-bubble/releases/latest)
+- 当前版本：`v0.1.5`
+- Windows 用户下载 Release 中的 `.exe` 安装包。
 
-- Shows your Codex plan, 5-hour quota, weekly quota, and next reset time in a compact always-on-top widget.
-- Uses clear quota states for healthy, caution, and critical remaining usage.
-- Collapses into a small floating orb when idle, then expands on hover.
-- Indicates whether quota is currently being consumed.
-- Includes persistent expansion, always-on-top controls, and localized tray actions.
-- Falls back to a clearly marked weekly-quota view when the 5-hour window is unavailable.
-- Checks for app updates automatically and supports signed in-app updates on Windows.
-- Shows reset credit count and available reset-credit expiration times when the quota service provides them.
-- Handles stale data, signed-out sessions, unavailable quota responses, and loading states without fabricating values.
+## 界面预览
 
-## Screenshots
+### 两款面板皮肤
 
-| Quota states | Floating orb | Reset credit expiration |
-| --- | --- | --- |
-| ![Healthy, caution, and critical quota states](docs/images/quota-states.png) | ![Collapsed quota orb](docs/images/quota-orb.png) | ![Reset credit expiration popover](docs/images/quota-reset-expiration.png) |
+可以在面板中切换粉色与蓝色皮肤，面板和浮窗会使用对应的视觉样式。
 
-### Weekly quota fallback
-
-| Expanded weekly view | Weekly quota orb |
+| 粉色皮肤 | 蓝色皮肤 |
 | --- | --- |
-| ![Expanded weekly quota fallback](docs/images/quota-v0.1.4-weekly-fallback.png) | ![Weekly quota orb with W badge](docs/images/quota-v0.1.4-weekly-orb.png) |
+| ![Token Bubble 粉色皮肤今日面板](docs/images/token-bubble-panel-pink-today.png) | ![Token Bubble 蓝色皮肤今日面板](docs/images/token-bubble-panel-blue-today.png) |
 
-## Repository Metadata
+### 今日、近7天和近30天
 
-Suggested repository description:
+点击用量范围可以在今日、近7天和近30天之间切换。面板会同步更新 Token 总量、柱状图、Token 类型分布和估算花费。
 
-```text
-Floating Windows/macOS desktop widget for checking Codex quota from the local Codex Desktop login state.
-```
+| 今日 | 近7天 | 近30天 |
+| --- | --- | --- |
+| ![Token Bubble 今日 Token 用量](docs/images/token-bubble-panel-pink-today.png) | ![Token Bubble 近7天 Token 用量](docs/images/token-bubble-panel-pink-7d.png) | ![Token Bubble 近30天 Token 用量](docs/images/token-bubble-panel-pink-30d.png) |
 
-Suggested topics:
+### 浮窗样式
 
-```text
-codex, quota, tauri, react, rust, desktop-app, windows, macos, productivity
-```
+浮窗提供粉色与蓝色样式，可调整尺寸、固定位置并保持置顶。点击浮窗可以打开完整面板。
 
-## How It Works
+| 粉色浮窗 | 蓝色浮窗 |
+| --- | --- |
+| ![Token Bubble 粉色浮窗](docs/images/token-bubble-orb-pink.png) | ![Token Bubble 蓝色浮窗](docs/images/token-bubble-orb-blue.png) |
 
-Token Bubble reads the existing Codex Desktop login state on your machine and queries Codex/ChatGPT quota endpoints with that session. It does not redeem reset credits or modify account settings.
+## 主要功能
 
-Browser preview uses mock data. Real quota reading requires the Tauri desktop app and an existing Codex Desktop login on the same machine.
+- 显示 Codex 周期剩余额度、刷新时间和额度状态。
+- 切换今日、近7天、近30天的 Token 用量。
+- 展示输入、缓存、输出和推理 Token 的分布。
+- 根据本地 Token 用量估算花费。
+- 使用柱状图和近90天热力图查看使用趋势。
+- 切换粉色与蓝色面板皮肤。
+- 调整浮窗大小、固定浮窗位置并保持窗口置顶。
+- 设置会员续费日期并显示距离续费还有多少天。
+- 从托盘快速刷新、显示或隐藏面板和浮窗。
 
-## Download
+## 使用说明
 
-For normal users, download the latest installer from GitHub Releases:
+1. 安装并启动 Token Bubble。
+2. 确保本机 Codex Desktop 已登录。
+3. 点击面板中的用量范围，在今日、近7天和近30天之间切换。
+4. 使用右侧控制按钮切换皮肤、调整尺寸、固定浮窗或修改面板颜色。
+5. 点击顶部续费日期设置会员续费时间。
 
-- Latest release: https://github.com/h17612764275-cloud/token-bubble/releases/latest
-- Windows: use the `.exe` or `.msi` installer.
-- macOS Universal: use the `.dmg` bundle.
+## 数据与隐私
 
-Updater artifacts are signed with the project's Tauri update key. Windows Authenticode signing and macOS notarization are separate platform-signing steps; builds without those certificates may still trigger SmartScreen or Gatekeeper warnings.
+Token Bubble 在本机读取现有 Codex Desktop 登录状态，以只读方式查询额度。Token 用量历史、界面设置和会员续费日期保存在本地。
 
-## Feedback
+- 不上传提示词、聊天内容或本地用量历史。
+- 不记录遥测、分析数据或崩溃报告。
+- 不兑换重置额度，也不修改账户设置。
+- 本地 Token 统计用于历史和验证视图，不会替代服务端返回的真实额度。
 
-Please use GitHub Issues for bugs, compatibility reports, and feature requests:
+完整边界请查看 [PRIVACY.md](PRIVACY.md) 和 [SECURITY.md](SECURITY.md)。
 
-https://github.com/h17612764275-cloud/token-bubble/issues
+## 来源与授权
 
-## Privacy Boundary
+Token Bubble 是独立的衍生项目，并非 Quota Float 或 CodexScope 的官方版本。
 
-Token Bubble is local-first and intentionally narrow:
+- **Quota Float**：提供了基础桌面浮窗架构与 Codex 额度展示能力。
+- **CodexScope**：提供了本地 Token 用量验证相关组件。
+- **Token Bubble**：在上述基础上增加了新的面板、皮肤、时间范围、Token 分布、估算花费、浮窗控制和会员续费设置。
 
-- Reads the local Codex Desktop login state only to query Codex quota.
-- Sends the existing Codex access token only to ChatGPT quota endpoints.
-- Stores only widget preferences in its own app config directory.
-- Does not store Codex tokens, account IDs, prompts, chat history, raw quota responses, or local auth paths.
-- Does not include telemetry, analytics, crash reporting, or third-party tracking.
-- Does not redeem reset credits or modify account settings.
+许可证和第三方声明见 [LICENSE](LICENSE) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-See [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md) for the full boundary.
+## 本地开发
 
-## Accuracy Boundary
-
-Codex quota is read from Codex/ChatGPT quota service responses. If the response format changes, the app shows an unavailable or stale state instead of inventing quota values.
-
-## Development
-
-Requirements:
-
-- Node.js 20+
-- Rust stable
-- Tauri 2 system dependencies for your platform
+需要 Node.js 20+、Rust stable 和 Tauri 2 对应的系统依赖。
 
 ```bash
 npm install
-npm run dev
 npm run test
 npm run build
 npm run tauri dev
 ```
 
-After Codex Desktop updates, run the compatibility check:
-
-```bash
-npm run check:codex
-```
-
-See [docs/CODEX-UPDATE-CHECK.md](docs/CODEX-UPDATE-CHECK.md) for the automated update-check workflow and optional Task Scheduler setup.
-
-## Build
+构建安装包：
 
 ```bash
 npm run tauri build
 ```
 
-On Windows, Tauri may download WiX to create an MSI installer. If WiX download fails, the release executable may still be produced at:
+## 反馈
 
-```text
-src-tauri/target/release/token-bubble.exe
-```
-
-## Release
-
-GitHub Actions are configured for:
-
-- CI on push/PR: frontend tests, Rust tests, web build, Tauri build.
-- `v*` tags: Windows and macOS Universal installers, updater signatures, `latest.json`, and a public GitHub Release.
-
-See [docs/GITHUB-RELEASE-CHECKLIST.md](docs/GITHUB-RELEASE-CHECKLIST.md) before publishing a version for others.
-
-Do not upload local credentials, `.codex`, `.env*`, screenshots with personal data, `node_modules`, `dist`, `src-tauri/target`, or local installers to source control.
-
-## License
-
-MIT
+请通过 [GitHub Issues](https://github.com/h17612764275-cloud/token-bubble/issues) 提交问题或建议。发布截图和日志前，请移除令牌、账号信息、邮箱和本地文件路径。
