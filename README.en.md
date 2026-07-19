@@ -16,11 +16,17 @@ Token Bubble is derived from **Quota Float** and integrates **CodexScope** for l
 
 ### Two panel skins
 
-Switch between the pink and blue skins. The panel and floating widget use the corresponding visual style.
+Token Bubble provides the Soap Bubble skin (Bubble) and the Glass Bottle skin (Glass). The panel and floating widget share the selected skin's material and visual style.
 
-| Pink skin | Blue skin |
+| Soap Bubble skin (Bubble) | Glass Bottle skin (Glass) |
 | --- | --- |
-| ![Token Bubble pink skin showing today's usage](docs/images/token-bubble-panel-pink-today.png) | ![Token Bubble blue skin showing today's usage](docs/images/token-bubble-panel-blue-today.png) |
+| ![Token Bubble Bubble skin panel and widget](docs/images/token-bubble-skin-bubble-overview.png) | ![Token Bubble Glass skin panel and widget](docs/images/token-bubble-skin-glass-overview.png) |
+
+### Custom colors for both skins
+
+Both the Bubble and Glass panels support custom colors. Open the color picker to choose a color from the field, hue bar, or RGB values.
+
+![Token Bubble panel color picker](docs/images/token-bubble-color-picker.png)
 
 ### Today, last 7 days, and last 30 days
 
@@ -28,15 +34,15 @@ Switch the usage range between today, the last 7 days, and the last 30 days. The
 
 | Today | Last 7 days | Last 30 days |
 | --- | --- | --- |
-| ![Token Bubble token usage for today](docs/images/token-bubble-panel-pink-today.png) | ![Token Bubble token usage for the last 7 days](docs/images/token-bubble-panel-pink-7d.png) | ![Token Bubble token usage for the last 30 days](docs/images/token-bubble-panel-pink-30d.png) |
+| ![Token Bubble token usage for today](docs/images/token-bubble-skin-bubble-today.png) | ![Token Bubble token usage for the last 7 days](docs/images/token-bubble-skin-bubble-7d.png) | ![Token Bubble token usage for the last 30 days](docs/images/token-bubble-skin-bubble-30d.png) |
 
 ### Floating widget
 
-The floating widget has matching pink and blue styles. It can be resized, locked in place, and kept on top. Click it to open the full panel.
+The floating widget matches the selected Bubble or Glass skin. It can be resized, locked in place, and kept on top. Click it to open the full panel.
 
-| Pink widget | Blue widget |
+| Bubble widget | Glass widget |
 | --- | --- |
-| ![Token Bubble pink floating widget](docs/images/token-bubble-orb-pink.png) | ![Token Bubble blue floating widget](docs/images/token-bubble-orb-blue.png) |
+| ![Token Bubble Bubble floating widget](docs/images/token-bubble-orb-bubble.png) | ![Token Bubble Glass floating widget](docs/images/token-bubble-orb-glass.png) |
 
 ## Features
 
@@ -45,7 +51,7 @@ The floating widget has matching pink and blue styles. It can be resized, locked
 - Breaks usage down into input, cached, output, and reasoning tokens.
 - Estimates cost from locally observed token usage.
 - Shows usage trends with a bar chart and a 90-day heatmap.
-- Switches between pink and blue panel skins.
+- Switches between the Bubble and Glass panel skins, with custom colors for both.
 - Resizes the floating widget, locks its position, and keeps it on top.
 - Stores a membership renewal date and shows the remaining days.
 - Provides tray actions for refresh and panel/widget visibility.
@@ -55,7 +61,7 @@ The floating widget has matching pink and blue styles. It can be resized, locked
 1. Install and start Token Bubble.
 2. Make sure Codex Desktop is signed in on the same computer.
 3. Select today, 7 days, or 30 days from the usage range.
-4. Use the controls to switch skins, resize or lock the widget, and adjust the panel color.
+4. Use the controls to switch Bubble/Glass skins, open the color picker, resize the widget, or lock it in place.
 5. Select the renewal date at the top of the panel to set your membership renewal.
 
 ## Data and privacy
