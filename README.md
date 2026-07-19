@@ -1,8 +1,12 @@
-# Quota Float
+# Token Bubble 余量浮窗
 
 Lightweight floating desktop widget for checking Codex quota from the local Codex Desktop login state.
 
-![Quota Float quota states](docs/images/quota-states.png)
+Token Bubble 基于 **Quota Float** 开发，并集成了 **CodexScope** 的本地用量验证功能。原项目版权及许可证归各自作者所有；详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+Token Bubble is derived from **Quota Float** and integrates **CodexScope** for local usage verification. The original projects retain their respective copyrights and licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+![Token Bubble quota states](docs/images/quota-states.png)
 
 ## Highlights
 
@@ -44,7 +48,7 @@ codex, quota, tauri, react, rust, desktop-app, windows, macos, productivity
 
 ## How It Works
 
-Quota Float reads the existing Codex Desktop login state on your machine and queries Codex/ChatGPT quota endpoints with that session. It does not estimate usage from local token counts and does not redeem reset credits or modify account settings.
+Token Bubble reads the existing Codex Desktop login state on your machine and queries Codex/ChatGPT quota endpoints with that session. It does not redeem reset credits or modify account settings.
 
 Browser preview uses mock data. Real quota reading requires the Tauri desktop app and an existing Codex Desktop login on the same machine.
 
@@ -52,7 +56,7 @@ Browser preview uses mock data. Real quota reading requires the Tauri desktop ap
 
 For normal users, download the latest installer from GitHub Releases:
 
-- Latest release: https://github.com/change-42-yhmm/quota-float/releases/latest
+- Latest release: https://github.com/h17612764275-cloud/token-bubble/releases/latest
 - Windows: use the `.exe` or `.msi` installer.
 - macOS Universal: use the `.dmg` bundle.
 
@@ -62,11 +66,11 @@ Updater artifacts are signed with the project's Tauri update key. Windows Authen
 
 Please use GitHub Issues for bugs, compatibility reports, and feature requests:
 
-https://github.com/change-42-yhmm/quota-float/issues
+https://github.com/h17612764275-cloud/token-bubble/issues
 
 ## Privacy Boundary
 
-Quota Float is local-first and intentionally narrow:
+Token Bubble is local-first and intentionally narrow:
 
 - Reads the local Codex Desktop login state only to query Codex quota.
 - Sends the existing Codex access token only to ChatGPT quota endpoints.
@@ -114,7 +118,7 @@ npm run tauri build
 On Windows, Tauri may download WiX to create an MSI installer. If WiX download fails, the release executable may still be produced at:
 
 ```text
-src-tauri/target/release/quota-float.exe
+src-tauri/target/release/token-bubble.exe
 ```
 
 ## Release

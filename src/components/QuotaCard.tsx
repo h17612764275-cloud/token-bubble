@@ -1,9 +1,15 @@
 import { ArrowClockwise, ArrowDown, ArrowUp, ArrowsInSimple, ArrowsOutSimple, ClockCounterClockwise, CloudSlash, Info, PushPin, PushPinSlash, SignIn, WarningCircle } from "@phosphor-icons/react";
-import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { clampPercent, formatDateTime, formatResetDate, formatResetTime, quotaTier } from "../lib/format";
 import { copy, normalizeLanguage } from "../lib/i18n";
-import type { Language, ProviderSnapshot, WidgetPreferences } from "../types";
+import { FIXED_BUBBLE_WIDGET_ACCENT } from "../lib/skin";
+import type { Language, ProviderSnapshot, WidgetPreferences, WidgetStyle } from "../types";
 import { ProviderMark } from "./ProviderMark";
+import { CloudMistGauge } from "./CloudMistGauge";
+import { LiquidGauge } from "./LiquidGauge";
+import bubbleCloud from "../assets/bubble-material-reference.png";
+import bubbleGlass from "../assets/bubble-empty-reference.png";
+import bubbleRim from "../assets/bubble-rim-reference.png";
 
 interface Props {
   snapshot: ProviderSnapshot;
@@ -15,6 +21,7 @@ interface Props {
   onLock: () => void;
   onToggleStayExpanded: () => void;
   onDrag: () => void;
+  onOpenPanel?: () => void;
   onHover: (hovered: boolean) => void;
   onRefresh?: () => void;
   isConsuming?: boolean;
@@ -160,7 +167,7 @@ export const QuotaCard = memo(function QuotaCard({
   );
 });
 
-export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, language = "zh-CN" }: Pick<Props, "snapshot" | "onDrag" | "onHover"> & { language?: Language }) {
+export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, onOpenPanel, language = "zh-CN", positionLocked = false, widgetSize = 68, accentColor = "#b97892", widgetStyle = "bubble" }: Pick<Props, "snapshot" | "onDrag" | "onHover" | "onOpenPanel"> & { language?: Language; positionLocked?: boolean; widgetSize?: number; accentColor?: string; widgetStyle?: WidgetStyle }) {
   const [idle, setIdle] = useState(false);
   const idleTimer = useRef<number | null>(null);
   const activeLanguage = normalizeLanguage(language);
@@ -171,6 +178,21 @@ export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, lang
   const displayingWeeklyAsPrimary = primary === null && weekly !== null;
   const tier = quotaTier(displayPercent);
   const available = snapshot.status === "ok" && displayPercent !== null;
+  const scale = Math.min(100, Math.max(52, widgetSize)) / 68;
+  const widgetAccent = widgetStyle === "bubble" ? FIXED_BUBBLE_WIDGET_ACCENT : accentColor;
+  const responsiveStyle = {
+    "--orb-number-size": `${31 * scale}px`,
+    "--orb-percent-size": `${12 * scale}px`,
+    "--orb-percent-right": `${6.5 * scale}px`,
+    "--orb-percent-bottom": `${9.5 * scale}px`,
+    "--orb-number-offset": "0px",
+    "--orb-badge-width": `${44 * scale}px`,
+    "--orb-badge-height": `${17 * scale}px`,
+    "--orb-badge-font-size": `${12 * scale}px`,
+    "--orb-badge-line-height": `${12 * scale}px`,
+    "--bubble-cloud-top": `${displayPercent === null ? 100 : Math.max(18, 88 - displayPercent * .68)}%`,
+    "--theme-accent": widgetAccent,
+  } as CSSProperties;
 
   useEffect(() => {
     idleTimer.current = window.setTimeout(() => setIdle(true), 2000);
@@ -187,21 +209,27 @@ export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, lang
 
   return (
     <main
-      className={`quota-orb quota-card--${snapshot.status} quota-card--${tier}${displayingWeeklyAsPrimary ? " quota-orb--weekly" : ""}${idle ? " quota-orb--idle" : ""}`}
+      className={`quota-orb quota-orb--${widgetStyle} quota-card--${snapshot.status} quota-card--${tier}${displayingWeeklyAsPrimary ? " quota-orb--weekly" : ""}${idle ? " quota-orb--idle" : ""}`}
+      style={responsiveStyle}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={() => onHover(false)}
-      onMouseDown={(event) => { if (event.button === 0) void onDrag(); }}
+      onMouseDown={(event) => {
+        if (event.button !== 0) return;
+        if (event.detail >= 2) {
+          event.preventDefault();
+          void onOpenPanel?.();
+          return;
+        }
+        if (!positionLocked) void onDrag();
+      }}
       aria-label={available ? (displayingWeeklyAsPrimary ? t.weeklyAvailableLabel(displayPercent!) : t.availableLabel(displayPercent!)) : localizedBackendMessage(snapshot.message, activeLanguage) ?? t.unavailableStatus}
     >
       <div className="aurora" aria-hidden="true" />
-      {available && displayingWeeklyAsPrimary ? (
-        <span className="orb-weekly-badge" aria-hidden="true">
-          <svg viewBox="0 0 55 17" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M7.3687 52.2894C13.0674 47.8486 17 38.4172 17 27.5C17 16.5828 13.0674 7.15141 7.3687 2.71063C3.88364 -0.00516105 0 3.58172 0 8L0 47C0 51.4183 3.88364 55.0052 7.3687 52.2894Z" fill="#61A1E2" fillOpacity=".8" transform="matrix(0 1 -1 0 55 0)" />
-          </svg>
-          <b>W</b>
-        </span>
-      ) : null}
+      {widgetStyle === "bubble" ? <img className="orb-bubble-glass" src={bubbleGlass} alt="" aria-hidden="true" /> : null}
+      {widgetStyle === "bubble" ? <img className="orb-bubble-cloud" src={bubbleCloud} alt="" aria-hidden="true" /> : null}
+      {widgetStyle === "bubble" ? <img className="orb-bubble-rim" src={bubbleRim} alt="" aria-hidden="true" /> : null}
+      {available && widgetStyle === "bottle" ? <LiquidGauge level={displayPercent!} color={widgetAccent} /> : null}
+      {available && widgetStyle === "bubble" ? <CloudMistGauge level={displayPercent!} /> : null}
       {available ? (
         <section className="orb-metric">
           <span>{displayPercent}</span>

@@ -1,6 +1,6 @@
 # Privacy
 
-Quota Float is designed to be local-first and minimal.
+Token Bubble is designed to be local-first and minimal.
 
 ## What It Reads
 
@@ -10,14 +10,17 @@ Quota Float is designed to be local-first and minimal.
 
 ## What It Stores
 
-Quota Float stores only widget preferences in its own application config directory:
+Token Bubble stores widget preferences and a bounded local usage history:
 
 - locked state
 - always-on-top state
 - pinned provider
 - auto-rotate interval
+- daily quota percentages and token totals used by the local history view
 
-It does not copy or persist Codex tokens, account IDs, raw quota responses, user prompts, chat history, or local file paths.
+This history stays in the app's local storage. The app does not copy or persist
+Codex access tokens, account IDs, raw quota responses, user prompts, chat
+content, or local auth paths.
 
 ## What It Sends
 
@@ -34,4 +37,7 @@ Logs are intentionally generic. They must not include tokens, account IDs, raw b
 
 ## Accuracy Boundary
 
-Quota Float displays quota windows returned by the Codex quota service. It does not estimate quota from local token usage and does not fabricate values when the response shape is unknown.
+Token Bubble displays quota windows returned by the Codex quota service and
+separately summarizes local token usage for its history and verification views.
+Local token totals do not replace service-provided quota values, and the app
+does not fabricate quota values when the response shape is unknown.

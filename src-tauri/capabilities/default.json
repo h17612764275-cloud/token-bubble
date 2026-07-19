@@ -2,10 +2,11 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capabilities for the floating widget",
-  "windows": ["widget"],
+  "windows": ["widget", "tray-panel"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
     "core:window:allow-outer-position",
     "core:window:allow-set-size",
     "core:window:allow-set-always-on-top",
@@ -14,7 +15,7 @@
     {
       "identifier": "opener:allow-open-url",
       "allow": [
-        { "url": "https://github.com/change-42-yhmm/quota-float/releases/*" }
+        { "url": "https://github.com/h17612764275-cloud/token-bubble/releases/*" }
       ]
     },
     "window-state:default"

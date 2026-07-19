@@ -1,0 +1,11 @@
+CodexScope Windows 用户先看
+
+1. 双击 Open CodexScope.cmd。
+2. CodexScope Files 文件夹不用点，程序会自动使用里面的文件。
+3. 这个包已经内置编译好的程序，不需要安装 Go。
+
+如果你下载的是 GitHub 自动生成的 Source code (zip)，那是给开发者看的源码包，不是普通用户推荐下载。
+
+1. Double-click Open CodexScope.cmd.
+2. You do not need to open CodexScope Files manually.
+3. This package already includes the compiled generator. You do not need Go.

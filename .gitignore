@@ -6,6 +6,8 @@
 /.codex-target*/
 /.tauri-dev-target/
 /.agents
+/.codebase-memory
+/.playwright-cli
 /.chrome-qa
 /.chrome-qa2
 /.codex
@@ -23,10 +25,14 @@
 *.pdb
 *.tmp
 *.bak
+/output
+/qa
+/design-qa.md
 .env
 .env.*
 auth.json
 credentials.json
 token.json
 .tauri-updater.key
+!/src-tauri/resources/codexscope/CodexScope Files/bin/codexscope-windows-amd64.exe
 /效果/

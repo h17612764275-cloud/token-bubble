@@ -14,7 +14,7 @@ const preview: ProviderSnapshot = {
   status: "ok",
   message: null,
 };
-const preferences: WidgetPreferences = { locked: false, alwaysOnTop: true, stayExpanded: false, pinnedProvider: "codex", autoRotateSeconds: 12, language: "en" };
+const preferences: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#6f7cff", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: "codex", autoRotateSeconds: 12, language: "en" };
 
 interface Values {
   radius: number;
@@ -71,7 +71,7 @@ export function DesignPlayground() {
   }) as CSSProperties, [values]);
 
   const makePreview = (mode: PreviewMode): ProviderSnapshot => {
-    if (mode === "orb") return preview;
+    if (mode === "orb") return { ...preview, shortWindow: preview.shortWindow ? { ...preview.shortWindow, remainingPercent: 95 } : null };
     if (mode === "weekly" || mode === "weekly-orb") return { ...preview, shortWindow: null };
     if (typeof mode === "number") {
       return { ...preview, shortWindow: preview.shortWindow ? { ...preview.shortWindow, remainingPercent: mode } : null };
@@ -107,10 +107,10 @@ export function DesignPlayground() {
     }
 
     return (
-      <div className="screenshot-stage" style={style}>
+      <div className={`screenshot-stage${previewMode === "orb" || previewMode === "weekly-orb" ? " screenshot-stage--orb" : ""}`} style={style}>
         <div className={previewMode === "orb" || previewMode === "weekly-orb" ? "design-orb-frame" : "design-card-frame"}>
           {previewMode === "orb" || previewMode === "weekly-orb"
-            ? <QuotaOrb snapshot={activePreview} language="en" onDrag={() => {}} onHover={() => {}} />
+            ? <QuotaOrb snapshot={activePreview} language="en" accentColor={preferences.accentColor} onDrag={() => {}} onHover={() => {}} />
             : <QuotaCard snapshot={activePreview} preferences={preferences} providerCount={1} onPrevious={() => {}} onNext={() => {}} onTogglePin={() => {}} onLock={() => {}} onToggleStayExpanded={() => {}} onDrag={() => {}} onHover={() => {}} initialShowCreditTip={showCreditTip} />}
         </div>
       </div>
@@ -127,7 +127,7 @@ export function DesignPlayground() {
         </div>
         <div className={previewMode === "orb" || previewMode === "weekly-orb" ? "design-orb-frame" : "design-card-frame"}>
           {previewMode === "orb" || previewMode === "weekly-orb"
-            ? <QuotaOrb snapshot={activePreview} onDrag={() => {}} onHover={() => {}} />
+            ? <QuotaOrb snapshot={activePreview} accentColor={preferences.accentColor} onDrag={() => {}} onHover={() => {}} />
             : <QuotaCard snapshot={activePreview} preferences={preferences} providerCount={1} onPrevious={() => {}} onNext={() => {}} onTogglePin={() => {}} onLock={() => {}} onToggleStayExpanded={() => {}} onDrag={() => {}} onHover={() => {}} />}
         </div>
       </section>

@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QuotaCard, QuotaOrb } from "./components/QuotaCard";
-import { fetchSnapshots, getPreferences, listenDesktopEvents, setAlwaysOnTop, setWidgetExpanded, startDragging, updatePreferences } from "./lib/bridge";
+import { TrayPanel } from "./components/TrayPanel";
+import { fetchSnapshots, getPreferences, listenDesktopEvents, resizeFloatingWidget, setWidgetExpanded, setWidgetPositionLocked, startDragging, toggleFloatingWidget, togglePanelFromWidget, updatePreferences } from "./lib/bridge";
 import { needsFastRefresh } from "./lib/format";
-import { checkForAppUpdate, openReleasePage } from "./lib/appUpdate";
+import { checkForAppUpdate } from "./lib/appUpdate";
 import { copy, normalizeLanguage } from "./lib/i18n";
 import { mergeSnapshots } from "./lib/snapshots";
+import { recordDailyUsage } from "./lib/dailyUsage";
+import { withPanelAccentColor, withWidgetStyle } from "./lib/skin";
 import type { ProviderSnapshot, WidgetPreferences } from "./types";
 
-const DEFAULT_PREFS: WidgetPreferences = { locked: false, alwaysOnTop: true, stayExpanded: false, pinnedProvider: null, autoRotateSeconds: 12, language: "zh-CN" };
+const DEFAULT_PREFS: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#6f7cff", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: null, autoRotateSeconds: 12, language: "zh-CN" };
 
 export default function App() {
+  const isTrayPanel = new URLSearchParams(window.location.search).get("view") === "tray";
   const [snapshots, setSnapshots] = useState<ProviderSnapshot[]>([]);
   const [preferences, setPreferences] = useState(DEFAULT_PREFS);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -49,6 +53,7 @@ export default function App() {
       if (hasFailure) failures.current += 1;
       else failures.current = 0;
       for (const item of values) {
+        recordDailyUsage(item);
         const nextPrimary = item.shortWindow?.remainingPercent;
         const previous = previousPrimary.current.get(item.provider);
         if (nextPrimary !== undefined && previous !== undefined && nextPrimary < previous) {
@@ -92,9 +97,10 @@ export default function App() {
   }, [checkUpdate, refresh]);
 
   useEffect(() => {
+    if (isTrayPanel) return;
     const timer = window.setTimeout(() => checkUpdate(false), 12_000);
     return () => window.clearTimeout(timer);
-  }, [checkUpdate]);
+  }, [checkUpdate, isTrayPanel]);
 
   const refreshMs = useMemo(() => {
     const backoff = failures.current === 0 ? 5 * 60_000 : Math.min(30 * 60_000, 30_000 * 2 ** (failures.current - 1));
@@ -160,34 +166,28 @@ export default function App() {
     }, 180);
   }, [preferences.stayExpanded, refresh]);
 
-  useEffect(() => {
-    if (!preferences.stayExpanded) return;
-    if (collapseTimer.current !== null) window.clearTimeout(collapseTimer.current);
-    setCompact(false);
-    void setWidgetExpanded(true).catch(() => setOperationError("Widget expand failed."));
-  }, [preferences.stayExpanded]);
+  if (!current) return <div className={isTrayPanel ? "tray-panel tray-panel--loading" : "loading-orb"} aria-label={t.loadingQuota}><span /><span /><span /></div>;
 
-  if (!current) return <div className="loading-card" aria-label={t.loadingQuota}><span /><span /><span /></div>;
-
-  if (compact) {
-    return <QuotaOrb snapshot={current} language={language} onDrag={() => startDragging()} onHover={handleHover} />;
+  if (isTrayPanel) {
+    return (
+      <TrayPanel
+        snapshot={current}
+        preferences={preferences}
+        onRefresh={() => void refresh(true)}
+        onToggleWidget={() => toggleFloatingWidget()}
+        onTogglePositionLock={() => setWidgetPositionLocked(!preferences.positionLocked).then((value) => setPreferences({ ...DEFAULT_PREFS, ...value }))}
+        onResizeWidget={(larger) => resizeFloatingWidget(larger).then((value) => setPreferences({ ...DEFAULT_PREFS, ...value }))}
+        onPanelColorChange={(color) => {
+          const next = withPanelAccentColor(preferences, color);
+          return updatePreferences(next).then(() => setPreferences(next));
+        }}
+        onSkinChange={(widgetStyle) => {
+          const next = withWidgetStyle(preferences, widgetStyle);
+          return updatePreferences(next).then(() => setPreferences(next));
+        }}
+      />
+    );
   }
 
-  return (
-    <QuotaCard
-      snapshot={current}
-      preferences={preferences}
-      providerCount={snapshots.length}
-      onPrevious={() => setActiveIndex((value) => (value - 1 + snapshots.length) % snapshots.length)}
-      onNext={() => setActiveIndex((value) => (value + 1) % snapshots.length)}
-      onTogglePin={() => savePreferences({ ...preferences, pinnedProvider: preferences.pinnedProvider ? null : current.provider })}
-      onToggleStayExpanded={() => savePreferences({ ...preferences, stayExpanded: !preferences.stayExpanded })}
-      onLock={() => { setOperationError(null); void setAlwaysOnTop(!preferences.alwaysOnTop).then((value) => setPreferences({ ...DEFAULT_PREFS, ...value, language: normalizeLanguage(value.language) })).catch(() => setOperationError("Always-on-top toggle failed.")); }}
-      onDrag={() => startDragging()}
-      onHover={handleHover}
-      onRefresh={() => refresh(true)}
-      isConsuming={consumingProviders.has(current.provider)}
-      notice={showUpdateFallback && operationError ? <><span>{operationError}</span><button type="button" onMouseDown={(event) => event.stopPropagation()} onClick={() => void openReleasePage().catch(() => setOperationError("Could not open GitHub Releases."))}>GitHub Releases</button></> : operationError}
-    />
-  );
+  return <QuotaOrb snapshot={current} language={language} positionLocked={preferences.positionLocked} widgetSize={preferences.widgetSize} accentColor={preferences.accentColor} widgetStyle={preferences.widgetStyle} onDrag={() => startDragging()} onHover={() => undefined} onOpenPanel={() => togglePanelFromWidget()} />;
 }

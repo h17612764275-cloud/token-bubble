@@ -1,15 +1,26 @@
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
 use serde_json::Value;
 
-use crate::models::{ProviderSnapshot, UsageWindow};
+use crate::models::{DailyTokenUsage, ProviderSnapshot, UsageWindow};
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const CREDITS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+const PROFILE_URL: &str = "https://chatgpt.com/backend-api/wham/profiles/me";
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 const MAX_AUTH_BYTES: u64 = 256 * 1024;
+const PROFILE_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+
+type ProfileUsage = (Vec<DailyTokenUsage>, Option<u64>, Option<u64>);
+static PROFILE_CACHE: OnceLock<tokio::sync::Mutex<Option<(Instant, ProfileUsage)>>> =
+    OnceLock::new();
 
 struct Auth {
     access_token: String,
@@ -92,6 +103,73 @@ fn integer(value: &Value, keys: &[&str]) -> Option<u64> {
             .as_u64()
             .or_else(|| value.as_i64().and_then(|item| u64::try_from(item).ok()))
     })
+}
+
+fn parse_profile_usage(value: &Value) -> (Vec<DailyTokenUsage>, Option<u64>, Option<u64>) {
+    let stats = value.get("stats").unwrap_or(value);
+    let mut daily_usage = stats
+        .get("daily_usage_buckets")
+        .or_else(|| stats.get("dailyUsageBuckets"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|bucket| {
+            let date = pick_string(bucket, &["start_date", "startDate", "date"])?;
+            let tokens = integer(bucket, &["tokens", "token_count", "tokenCount"])?;
+            Some(DailyTokenUsage {
+                date: date.to_owned(),
+                tokens,
+            })
+        })
+        .collect::<Vec<_>>();
+    daily_usage.sort_by(|left, right| left.date.cmp(&right.date));
+    daily_usage.dedup_by(|left, right| {
+        if left.date == right.date {
+            left.tokens = left.tokens.max(right.tokens);
+            true
+        } else {
+            false
+        }
+    });
+    (
+        daily_usage,
+        integer(stats, &["lifetime_tokens", "lifetimeTokens"]),
+        integer(stats, &["peak_daily_tokens", "peakDailyTokens"]),
+    )
+}
+
+async fn fetch_profile_usage(
+    client: &reqwest::Client,
+    request_headers: HeaderMap,
+    force_refresh: bool,
+) -> Option<ProfileUsage> {
+    let cache = PROFILE_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
+    let mut cached = cache.lock().await;
+    if !force_refresh {
+        if let Some((updated_at, value)) = cached.as_ref() {
+            if updated_at.elapsed() < PROFILE_CACHE_TTL {
+                return Some(value.clone());
+            }
+        }
+    }
+    let fresh = match client
+        .get(PROFILE_URL)
+        .headers(request_headers)
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => limited_json(response)
+            .await
+            .ok()
+            .map(|value| parse_profile_usage(&value)),
+        _ => None,
+    };
+    if let Some(value) = fresh {
+        *cached = Some((Instant::now(), value.clone()));
+        Some(value)
+    } else {
+        cached.as_ref().map(|(_, value)| value.clone())
+    }
 }
 
 fn timestamp(value: &Value, keys: &[&str]) -> Option<String> {
@@ -308,7 +386,7 @@ async fn limited_json(mut response: reqwest::Response) -> Result<Value, ()> {
     serde_json::from_slice(&bytes).map_err(|_| ())
 }
 
-pub async fn fetch_snapshot(client: &reqwest::Client) -> ProviderSnapshot {
+pub async fn fetch_snapshot(client: &reqwest::Client, force_profile_refresh: bool) -> ProviderSnapshot {
     let auth = match load_auth() {
         Ok(value) => value,
         Err(message) => return ProviderSnapshot::failure("signed_out", message),
@@ -318,12 +396,16 @@ pub async fn fetch_snapshot(client: &reqwest::Client) -> ProviderSnapshot {
         Err(message) => return ProviderSnapshot::failure("signed_out", message),
     };
 
-    let (usage_result, credits_result) = tokio::join!(
+    let (usage_result, credits_result, profile_usage) = tokio::join!(
         client
             .get(USAGE_URL)
             .headers(request_headers.clone())
             .send(),
-        client.get(CREDITS_URL).headers(request_headers).send(),
+        client
+            .get(CREDITS_URL)
+            .headers(request_headers.clone())
+            .send(),
+        fetch_profile_usage(client, request_headers, force_profile_refresh),
     );
 
     let usage_response = match usage_result {
@@ -434,6 +516,11 @@ pub async fn fetch_snapshot(client: &reqwest::Client) -> ProviderSnapshot {
         _ => (usage_reset_credits, usage_reset_credit_expires_at),
     };
 
+    let (daily_token_usage, lifetime_tokens, peak_daily_tokens) = match profile_usage {
+        Some((usage, lifetime, peak)) => (Some(usage), lifetime, peak),
+        None => (None, None, None),
+    };
+
     ProviderSnapshot {
         provider: "codex".into(),
         display_name: "CODEX".into(),
@@ -442,6 +529,10 @@ pub async fn fetch_snapshot(client: &reqwest::Client) -> ProviderSnapshot {
         weekly_window,
         reset_credits,
         reset_credit_expires_at,
+        daily_token_usage,
+        lifetime_tokens,
+        peak_daily_tokens,
+        local_usage: None,
         updated_at: chrono::Utc::now().to_rfc3339(),
         status: "ok".into(),
         message: None,
@@ -567,5 +658,25 @@ mod tests {
         .unwrap();
         assert_eq!(weekly.remaining_percent, 98.0);
         assert_eq!(weekly.window_seconds, 604_800);
+    }
+
+    #[test]
+    fn parses_daily_profile_token_buckets() {
+        let value = serde_json::json!({
+            "stats": {
+                "daily_usage_buckets": [
+                    {"start_date": "2026-07-13", "tokens": 77_260_586},
+                    {"start_date": "2026-07-14", "tokens": 30_778_139}
+                ],
+                "lifetime_tokens": 250_087_924,
+                "peak_daily_tokens": 77_260_586
+            }
+        });
+        let (days, lifetime, peak) = parse_profile_usage(&value);
+        assert_eq!(days.len(), 2);
+        assert_eq!(days[0].date, "2026-07-13");
+        assert_eq!(days[0].tokens, 77_260_586);
+        assert_eq!(lifetime, Some(250_087_924));
+        assert_eq!(peak, Some(77_260_586));
     }
 }

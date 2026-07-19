@@ -30,9 +30,9 @@ Manual Windows smoke test:
 
 Manual macOS smoke test:
 
-- Install the `quota-float-macos-universal-unsigned` artifact built by CI or Release.
+- Install the `token-bubble-macos-universal-unsigned` artifact built by CI or Release.
 - Record `sw_vers`, CPU architecture, display scale, and whether the build is Intel, Apple Silicon, or universal.
-- Optional: run `bash scripts/macos-smoke-capture.sh "/Applications/Quota Float.app"` on a Mac to collect `system.txt` plus collapsed/expanded screenshots.
+- Optional: run `bash scripts/macos-smoke-capture.sh "/Applications/Token Bubble 余量浮窗.app"` on a Mac to collect `system.txt` plus collapsed/expanded screenshots.
 - Open the app on light and dark wallpapers; capture collapsed and expanded screenshots.
 - Drag the orb to each screen edge and corner; hover to expand and move the mouse away to collapse.
 - Confirm there is no white square background outside rounded corners and no visible clipped edge.

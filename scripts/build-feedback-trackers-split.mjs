@@ -16,7 +16,7 @@ const common = [
 ];
 
 const cn = {
-  file: "用户反馈跟踪表-中文.xlsx", sheet: "用户反馈", guide: "填写说明", title: "Quota Float 用户反馈跟踪表",
+  file: "用户反馈跟踪表-中文.xlsx", sheet: "用户反馈", guide: "填写说明", title: "Token Bubble 用户反馈跟踪表",
   scope: "用途边界：本表仅用于工具修复、问题回归与新功能升级管理。版本测试、构建、上传和发布流程无需读取或扫描本表，以节省 token 与扫描开销。",
   headers: ["时间","问题版本","工作分类","问题类型","用户反馈","修复 / 新功能方案","当前版本是否解决","是否解决状态","图片备注","后续是否再出现","人工查验","验证备注"],
   cats: ["功能修复","新功能增加"], types: ["界面与视觉","窗口与交互","数据与功能","平台兼容"],
@@ -29,7 +29,7 @@ const cn = {
   statusList: ["待确认","处理中","已解决","未解决","不适用"], qaList: ["待人工查验","查验通过","查验不通过","不适用"], pending: "待观察", qa: "待人工查验", english: false,
 };
 const en = {
-  file: "user-feedback-tracker-en.xlsx", sheet: "Feedback Tracker", guide: "Instructions", title: "Quota Float User Feedback Tracker",
+  file: "user-feedback-tracker-en.xlsx", sheet: "Feedback Tracker", guide: "Instructions", title: "Token Bubble User Feedback Tracker",
   scope: "Scope: this workbook is only for tool fixes, regression tracking, and feature upgrades. Version testing, builds, uploads, and release workflows do not need to read or scan it, reducing token and scanning overhead.",
   headers: ["Time","Problem Version","Work Category","Problem Type","User Feedback","Fix / Feature Plan","Solved in Current Version","Resolution Status","Image Notes","Reappeared Later","Manual QA","Verification Notes"],
   cats: ["Bug Fix","New Feature"], types: ["UI & Visual","Window & Interaction","Data & Function","Platform Compatibility"],

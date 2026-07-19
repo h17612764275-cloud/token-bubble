@@ -1,31 +1,129 @@
 mod codex;
+mod local_usage;
 mod models;
 
 use std::{
     fs,
     io::Write,
-    path::PathBuf,
-    sync::Mutex,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Mutex,
+    },
     time::{Duration, Instant},
 };
 
 use models::{ProviderSnapshot, WidgetPreferences};
 #[cfg(debug_assertions)]
 use models::UsageWindow;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    tray::TrayIconBuilder,
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WindowEvent,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_window_state::Builder as WindowStateBuilder;
 
-const COLLAPSED_LOGICAL_SIZE: f64 = 80.0;
+const DEFAULT_COLLAPSED_LOGICAL_SIZE: f64 = 68.0;
+const MIN_COLLAPSED_LOGICAL_SIZE: f64 = 52.0;
+const MAX_COLLAPSED_LOGICAL_SIZE: f64 = 100.0;
+const COLLAPSED_SIZE_STEP: f64 = 8.0;
 const EXPANDED_LOGICAL_SIZE: f64 = 320.0;
 const EDGE_SAFE_INSET_LOGICAL: f64 = 4.0;
 const SNAP_THRESHOLD_LOGICAL: f64 = 24.0;
 const POSITION_EPSILON: u32 = 2;
+const TRAY_PANEL_LOGICAL_WIDTH: f64 = 380.0;
+const TRAY_PANEL_LOGICAL_HEIGHT: f64 = 504.0;
+const TRAY_PANEL_GAP_LOGICAL: f64 = 10.0;
+
+fn copy_directory(source: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|error| error.to_string())?;
+    for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        if entry
+            .file_type()
+            .map_err(|error| error.to_string())?
+            .is_dir()
+        {
+            copy_directory(&source_path, &target_path)?;
+        } else {
+            fs::copy(source_path, target_path).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn open_codexscope(app: &AppHandle) -> Result<(), String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        return Err("CodexScope verification is currently available on Windows only.".into());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let source = app
+            .path()
+            .resource_dir()
+            .map_err(|error| error.to_string())?
+            .join("codexscope");
+        let target = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| error.to_string())?
+            .join("CodexScope");
+        copy_directory(&source, &target)?;
+        let launcher = target.join("Open CodexScope.cmd");
+        Command::new("cmd.exe")
+            .arg("/C")
+            .arg(&launcher)
+            .current_dir(&target)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod codexscope_resource_tests {
+    use super::*;
+
+    #[test]
+    fn copies_static_files_without_deleting_generated_data() {
+        let root = std::env::temp_dir().join(format!(
+            "token-bubble-codexscope-{}",
+            std::process::id()
+        ));
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir_all(source.join("CodexScope Files/app")).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(source.join("Open CodexScope.cmd"), "launcher").unwrap();
+        fs::write(source.join("CodexScope Files/app/index.html"), "dashboard").unwrap();
+        fs::write(target.join("data.js"), "generated").unwrap();
+
+        copy_directory(&source, &target).unwrap();
+
+        assert_eq!(fs::read_to_string(target.join("Open CodexScope.cmd")).unwrap(), "launcher");
+        assert_eq!(
+            fs::read_to_string(target.join("CodexScope Files/app/index.html")).unwrap(),
+            "dashboard"
+        );
+        assert_eq!(fs::read_to_string(target.join("data.js")).unwrap(), "generated");
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WidgetMotionPayload {
+    x: i32,
+    y: i32,
+}
 
 #[derive(Clone, Copy)]
 enum HorizontalDock {
@@ -100,6 +198,41 @@ struct AppState {
     simulate_short_window_for_testing: Mutex<bool>,
     geometry: Mutex<Option<WidgetGeometryState>>,
     drag_mode: Mutex<Option<WidgetMode>>,
+    panel_resize_active: AtomicBool,
+    panel_resize_generation: AtomicU64,
+}
+
+#[tauri::command]
+fn begin_panel_resize(state: State<'_, AppState>) {
+    state.panel_resize_generation.fetch_add(1, Ordering::Relaxed);
+    state.panel_resize_active.store(true, Ordering::Release);
+}
+
+fn finish_panel_resize_after(app: AppHandle, generation: u64, delay: Duration) {
+    std::thread::spawn(move || {
+        std::thread::sleep(delay);
+        let state = app.state::<AppState>();
+        if state.panel_resize_generation.load(Ordering::Acquire) != generation {
+            return;
+        }
+        if let Some(panel) = app.get_webview_window("tray-panel") {
+            let _ = panel.set_focus();
+        }
+        std::thread::sleep(Duration::from_millis(700));
+        let state = app.state::<AppState>();
+        if state.panel_resize_generation.load(Ordering::Acquire) == generation {
+            state.panel_resize_active.store(false, Ordering::Release);
+        }
+    });
+}
+
+#[tauri::command]
+fn end_panel_resize(app: AppHandle, state: State<'_, AppState>) {
+    let generation = state
+        .panel_resize_generation
+        .fetch_add(1, Ordering::Relaxed)
+        + 1;
+    finish_panel_resize_after(app, generation, Duration::ZERO);
 }
 
 fn apply_short_window_test_override(
@@ -129,7 +262,18 @@ fn apply_short_window_test_override(
 
 async fn fetch_snapshots_uncached(state: &State<'_, AppState>) -> Vec<ProviderSnapshot> {
     let _guard = state.fetch_lock.lock().await;
-    let values = vec![codex::fetch_snapshot(&state.client).await];
+    let mut snapshot = codex::fetch_snapshot(&state.client, true).await;
+    let usage_task = tokio::task::spawn_blocking(local_usage::collect_local_usage);
+    let exchange_rate = local_usage::fetch_usd_cny_rate(&state.client).await;
+    snapshot.local_usage = usage_task
+        .await
+        .ok()
+        .and_then(Result::ok);
+    if let (Some(usage), Some((rate, date))) = (&mut snapshot.local_usage, exchange_rate) {
+        usage.usd_cny_rate = rate;
+        usage.exchange_rate_date = date;
+    }
+    let values = vec![snapshot];
     if let Ok(mut cache) = state.snapshot_cache.lock() {
         *cache = Some((Instant::now(), values.clone()));
     }
@@ -209,7 +353,7 @@ async fn get_snapshots(state: State<'_, AppState>) -> Result<Vec<ProviderSnapsho
             }
         }
     }
-    let values = vec![codex::fetch_snapshot(&state.client).await];
+    let values = vec![codex::fetch_snapshot(&state.client, false).await];
     if let Ok(mut cache) = state.snapshot_cache.lock() {
         *cache = Some((Instant::now(), values.clone()));
     }
@@ -256,6 +400,16 @@ fn widget_window_size(logical_visual_size: f64, scale_factor: f64, safe_inset: u
         logical_to_physical(logical_visual_size, scale_factor),
         safe_inset,
     )
+}
+
+fn preferred_widget_size(state: &State<'_, AppState>) -> f64 {
+    state
+        .preferences
+        .lock()
+        .ok()
+        .map(|preferences| preferences.widget_size)
+        .unwrap_or(DEFAULT_COLLAPSED_LOGICAL_SIZE)
+        .clamp(MIN_COLLAPSED_LOGICAL_SIZE, MAX_COLLAPSED_LOGICAL_SIZE)
 }
 
 fn detect_dock(
@@ -506,8 +660,8 @@ fn expand_widget(
     let (monitor, scale_factor) = monitor_and_scale(&window)?;
     let safe_inset = logical_to_physical(EDGE_SAFE_INSET_LOGICAL, scale_factor);
     let collapsed_size = PhysicalSize::new(
-        widget_window_size(COLLAPSED_LOGICAL_SIZE, scale_factor, safe_inset),
-        widget_window_size(COLLAPSED_LOGICAL_SIZE, scale_factor, safe_inset),
+        widget_window_size(preferred_widget_size(&state), scale_factor, safe_inset),
+        widget_window_size(preferred_widget_size(&state), scale_factor, safe_inset),
     );
     let expanded_size = PhysicalSize::new(
         widget_window_size(EXPANDED_LOGICAL_SIZE, scale_factor, safe_inset),
@@ -572,7 +726,7 @@ mod geometry_tests {
 
     #[test]
     fn window_size_includes_the_transparent_safe_inset() {
-        assert_eq!(window_size_for_visual_size(80, 4), 88);
+        assert_eq!(window_size_for_visual_size(68, 4), 76);
         assert_eq!(widget_window_size(320.0, 1.5, 6), 492);
     }
 
@@ -631,8 +785,8 @@ fn collapse_widget(app: AppHandle, state: State<'_, AppState>) -> Result<(), Str
     let (monitor, scale_factor) = monitor_and_scale(&window)?;
     let safe_inset = logical_to_physical(EDGE_SAFE_INSET_LOGICAL, scale_factor);
     let collapsed_size = PhysicalSize::new(
-        widget_window_size(COLLAPSED_LOGICAL_SIZE, scale_factor, safe_inset),
-        widget_window_size(COLLAPSED_LOGICAL_SIZE, scale_factor, safe_inset),
+        widget_window_size(preferred_widget_size(&state), scale_factor, safe_inset),
+        widget_window_size(preferred_widget_size(&state), scale_factor, safe_inset),
     );
     let Some(monitor) = monitor else {
         window
@@ -694,8 +848,8 @@ fn begin_widget_drag(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
     let (_, scale_factor) = monitor_and_scale(&window)?;
     let safe_inset = logical_to_physical(EDGE_SAFE_INSET_LOGICAL, scale_factor);
     let collapsed_size = PhysicalSize::new(
-        widget_window_size(COLLAPSED_LOGICAL_SIZE, scale_factor, safe_inset),
-        widget_window_size(COLLAPSED_LOGICAL_SIZE, scale_factor, safe_inset),
+        widget_window_size(preferred_widget_size(&state), scale_factor, safe_inset),
+        widget_window_size(preferred_widget_size(&state), scale_factor, safe_inset),
     );
     let mode = state
         .geometry
@@ -723,8 +877,8 @@ fn finish_widget_drag(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
     let threshold = logical_to_physical(SNAP_THRESHOLD_LOGICAL, scale_factor) as i32;
     let safe_inset = logical_to_physical(EDGE_SAFE_INSET_LOGICAL, scale_factor);
     let collapsed_size = PhysicalSize::new(
-        widget_window_size(COLLAPSED_LOGICAL_SIZE, scale_factor, safe_inset),
-        widget_window_size(COLLAPSED_LOGICAL_SIZE, scale_factor, safe_inset),
+        widget_window_size(preferred_widget_size(&state), scale_factor, safe_inset),
+        widget_window_size(preferred_widget_size(&state), scale_factor, safe_inset),
     );
     let expanded_size = PhysicalSize::new(
         widget_window_size(EXPANDED_LOGICAL_SIZE, scale_factor, safe_inset),
@@ -826,6 +980,7 @@ fn get_preferences(state: State<'_, AppState>) -> Result<WidgetPreferences, Stri
 #[tauri::command]
 fn set_preferences(
     preferences: WidgetPreferences,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let preferences = preferences.normalized();
@@ -833,7 +988,8 @@ fn set_preferences(
     *state
         .preferences
         .lock()
-        .map_err(|_| "settings unavailable".to_string())? = preferences;
+        .map_err(|_| "settings unavailable".to_string())? = preferences.clone();
+    let _ = app.emit("preferences-changed", preferences);
     Ok(())
 }
 
@@ -896,13 +1052,174 @@ fn set_widget_always_on_top(
         .preferences
         .lock()
         .map_err(|_| "settings unavailable".to_string())? = next.clone();
-    let _ = app.emit_to("widget", "preferences-changed", next.clone());
+    let _ = app.emit("preferences-changed", next.clone());
     Ok(next)
+}
+
+#[tauri::command]
+fn show_floating_widget(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("widget")
+        .ok_or_else(|| "widget window missing".to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn toggle_floating_widget(app: AppHandle) -> Result<bool, String> {
+    let window = app
+        .get_webview_window("widget")
+        .ok_or_else(|| "widget window missing".to_string())?;
+    let visible = window.is_visible().map_err(|error| error.to_string())?;
+    if visible {
+        window.hide().map_err(|error| error.to_string())?;
+        Ok(false)
+    } else {
+        window.show().map_err(|error| error.to_string())?;
+        Ok(true)
+    }
+}
+
+#[tauri::command]
+fn set_widget_position_locked(
+    position_locked: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<WidgetPreferences, String> {
+    let mut next = state
+        .preferences
+        .lock()
+        .map_err(|_| "settings unavailable".to_string())?
+        .clone();
+    next.position_locked = position_locked;
+    persist_preferences(&state.preferences_path, &next)?;
+    *state
+        .preferences
+        .lock()
+        .map_err(|_| "settings unavailable".to_string())? = next.clone();
+    let _ = app.emit("preferences-changed", next.clone());
+    Ok(next)
+}
+
+#[tauri::command]
+fn resize_floating_widget(
+    larger: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<WidgetPreferences, String> {
+    let mut next = state
+        .preferences
+        .lock()
+        .map_err(|_| "settings unavailable".to_string())?
+        .clone();
+    let adjustment = if larger {
+        COLLAPSED_SIZE_STEP
+    } else {
+        -COLLAPSED_SIZE_STEP
+    };
+    next.widget_size = (next.widget_size + adjustment)
+        .clamp(MIN_COLLAPSED_LOGICAL_SIZE, MAX_COLLAPSED_LOGICAL_SIZE);
+
+    let window = app
+        .get_webview_window("widget")
+        .ok_or_else(|| "widget window missing".to_string())?;
+    let current = current_widget_rect(&window)?;
+    let (monitor, scale_factor) = monitor_and_scale(&window)?;
+    let safe_inset = logical_to_physical(EDGE_SAFE_INSET_LOGICAL, scale_factor);
+    let physical_size = widget_window_size(next.widget_size, scale_factor, safe_inset);
+    let size = PhysicalSize::new(physical_size, physical_size);
+    let centered = PhysicalPosition::new(
+        current.position.x + (current.size.width as i32 - physical_size as i32) / 2,
+        current.position.y + (current.size.height as i32 - physical_size as i32) / 2,
+    );
+    let position = monitor
+        .as_ref()
+        .map(|monitor| clamp_position_to_monitor(centered, size, monitor, safe_inset as i32))
+        .unwrap_or(centered);
+
+    window
+        .set_size(size)
+        .map_err(|_| "failed to resize widget".to_string())?;
+    window
+        .set_position(position)
+        .map_err(|_| "failed to reposition widget".to_string())?;
+    persist_preferences(&state.preferences_path, &next)?;
+    *state
+        .preferences
+        .lock()
+        .map_err(|_| "settings unavailable".to_string())? = next.clone();
+    if let Ok(mut geometry) = state.geometry.lock() {
+        *geometry = None;
+    }
+    let _ = app.emit("preferences-changed", next.clone());
+    Ok(next)
+}
+
+#[tauri::command]
+fn toggle_panel_from_widget(app: AppHandle) -> Result<bool, String> {
+    let widget = app
+        .get_webview_window("widget")
+        .ok_or_else(|| "widget window missing".to_string())?;
+    let panel = app
+        .get_webview_window("tray-panel")
+        .ok_or_else(|| "panel window missing".to_string())?;
+    if panel.is_visible().map_err(|error| error.to_string())? {
+        panel.hide().map_err(|error| error.to_string())?;
+        return Ok(false);
+    }
+
+    let widget_position = widget.outer_position().map_err(|error| error.to_string())?;
+    let widget_size = widget.outer_size().map_err(|error| error.to_string())?;
+    let panel_size = panel.outer_size().unwrap_or_else(|_| {
+        let scale = panel.scale_factor().unwrap_or(1.0);
+        PhysicalSize::new(
+            (TRAY_PANEL_LOGICAL_WIDTH * scale).round() as u32,
+            (TRAY_PANEL_LOGICAL_HEIGHT * scale).round() as u32,
+        )
+    });
+    let gap = (TRAY_PANEL_GAP_LOGICAL * panel.scale_factor().unwrap_or(1.0)).round() as i32;
+    let monitor = widget.current_monitor().map_err(|error| error.to_string())?;
+    let (left, top, right, bottom) = monitor
+        .map(|monitor| {
+            let origin = monitor.position();
+            let size = monitor.size();
+            (origin.x, origin.y, origin.x + size.width as i32, origin.y + size.height as i32)
+        })
+        .unwrap_or((0, 0, i32::MAX / 2, i32::MAX / 2));
+    let right_of_widget = widget_position.x + widget_size.width as i32 + gap;
+    let x = if right_of_widget + panel_size.width as i32 <= right - gap {
+        right_of_widget
+    } else {
+        widget_position.x - panel_size.width as i32 - gap
+    }
+    .clamp(left + gap, (right - panel_size.width as i32 - gap).max(left + gap));
+    let y = widget_position
+        .y
+        .clamp(top + gap, (bottom - panel_size.height as i32 - gap).max(top + gap));
+    panel
+        .set_position(PhysicalPosition::new(x, y))
+        .map_err(|error| error.to_string())?;
+    panel.show().map_err(|error| error.to_string())?;
+    panel.set_focus().map_err(|error| error.to_string())?;
+    let _ = app.emit_to("tray-panel", "refresh-requested", ());
+    Ok(true)
+}
+
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
 }
 
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show / Hide", true, None::<&str>)?;
     let refresh = MenuItem::with_id(app, "refresh", "Refresh now", true, None::<&str>)?;
+    let codexscope = MenuItem::with_id(
+        app,
+        "codexscope",
+        "Open CodexScope verification",
+        cfg!(target_os = "windows"),
+        None::<&str>,
+    )?;
     let update = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
     let unlock = MenuItem::with_id(app, "unlock", "Unlock widget", true, None::<&str>)?;
     let pin = MenuItem::with_id(app, "pin", "Pin / Unpin Codex", true, None::<&str>)?;
@@ -945,6 +1262,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     if initial_language != "en" {
         let _ = show.set_text("显示 / 隐藏");
         let _ = refresh.set_text("立即刷新");
+        let _ = codexscope.set_text("打开 CodexScope 数据核验");
         let _ = update.set_text("检查更新");
         let _ = unlock.set_text("解锁悬浮窗");
         let _ = pin.set_text("固定 / 取消固定 Codex");
@@ -958,6 +1276,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         &[
             &show,
             &refresh,
+            &codexscope,
             &update,
             &unlock,
             &pin,
@@ -971,18 +1290,28 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &show, &refresh, &update, &unlock, &pin, &language, &autostart, &quit,
+            &show,
+            &refresh,
+            &codexscope,
+            &update,
+            &unlock,
+            &pin,
+            &language,
+            &autostart,
+            &quit,
         ],
     )?;
     let mut builder = TrayIconBuilder::with_id("main")
         .menu(&menu)
-        .tooltip("Quota Float");
+        .show_menu_on_left_click(false)
+        .tooltip("Token Bubble 余量浮窗");
     if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone());
     }
     let autostart_menu = autostart.clone();
     let show_menu = show.clone();
     let refresh_menu = refresh.clone();
+    let codexscope_menu = codexscope.clone();
     let update_menu = update.clone();
     let unlock_menu = unlock.clone();
     let pin_menu = pin.clone();
@@ -1003,7 +1332,12 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                 }
             }
             "refresh" => {
-                let _ = app.emit_to("widget", "refresh-requested", ());
+                let _ = app.emit("refresh-requested", ());
+            }
+            "codexscope" => {
+                if let Err(error) = open_codexscope(app) {
+                    eprintln!("CodexScope launch failed: {error}");
+                }
             }
             "update" => {
                 let _ = app.emit_to("widget", "update-check-requested", ());
@@ -1015,7 +1349,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                     if let Ok(mut enabled) = state.simulate_short_window_for_testing.lock() {
                         *enabled = !*enabled;
                         let _ = test_short_window_menu.set_checked(*enabled);
-                        let _ = app.emit_to("widget", "refresh-requested", ());
+                        let _ = app.emit("refresh-requested", ());
                     }
                 }
             }
@@ -1025,7 +1359,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                     if let Ok(mut prefs) = state.preferences.lock() {
                         prefs.locked = false;
                         let _ = persist_preferences(&state.preferences_path, &prefs);
-                        let _ = app.emit_to("widget", "preferences-changed", prefs.clone());
+                        let _ = app.emit("preferences-changed", prefs.clone());
                     }
                 }
             }
@@ -1038,7 +1372,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                             Some("codex".into())
                         };
                         let _ = persist_preferences(&state.preferences_path, &prefs);
-                        let _ = app.emit_to("widget", "preferences-changed", prefs.clone());
+                        let _ = app.emit("preferences-changed", prefs.clone());
                     }
                 }
             }
@@ -1063,6 +1397,11 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                             "Refresh now"
                         } else {
                             "立即刷新"
+                        });
+                        let _ = codexscope_menu.set_text(if english {
+                            "Open CodexScope verification"
+                        } else {
+                            "打开 CodexScope 数据核验"
                         });
                         let _ = update_menu.set_text(if english {
                             "Check for updates"
@@ -1090,7 +1429,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                             "开机启动"
                         });
                         let _ = quit_menu.set_text(if english { "Quit" } else { "退出" });
-                        let _ = app.emit_to("widget", "preferences-changed", normalized);
+                        let _ = app.emit("preferences-changed", normalized);
                     }
                 }
             }
@@ -1120,7 +1459,6 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("widget") {
                 let _ = window.show();
@@ -1139,7 +1477,7 @@ pub fn run() {
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(12))
                 .redirect(reqwest::redirect::Policy::none())
-                .user_agent("QuotaFloat/0.1")
+                .user_agent("TokenBubble/0.1")
                 .build()
                 .expect("static HTTP client configuration must be valid");
             app.manage(AppState {
@@ -1152,6 +1490,8 @@ pub fn run() {
                 simulate_short_window_for_testing: Mutex::new(false),
                 geometry: Mutex::new(None),
                 drag_mode: Mutex::new(None),
+                panel_resize_active: AtomicBool::new(false),
+                panel_resize_generation: AtomicU64::new(0),
             });
             if setup_tray(app).is_err() {
                 eprintln!("tray setup failed; enabling taskbar fallback");
@@ -1164,6 +1504,10 @@ pub fn run() {
             }
             if let Some(window) = app.get_webview_window("widget") {
                 let _ = window.set_always_on_top(preferences.always_on_top);
+                let scale_factor = window.scale_factor().unwrap_or(1.0);
+                let safe_inset = logical_to_physical(EDGE_SAFE_INSET_LOGICAL, scale_factor);
+                let size = widget_window_size(preferences.widget_size, scale_factor, safe_inset);
+                let _ = window.set_size(PhysicalSize::new(size, size));
             }
             Ok(())
         })
@@ -1177,32 +1521,73 @@ pub fn run() {
             get_preferences,
             set_preferences,
             set_widget_locked,
-            set_widget_always_on_top
+            set_widget_always_on_top,
+            show_floating_widget,
+            toggle_floating_widget,
+            set_widget_position_locked,
+            resize_floating_widget,
+            begin_panel_resize,
+            end_panel_resize,
+            toggle_panel_from_widget,
+            quit_app
         ])
-        .on_tray_icon_event(|app, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                if let Some(window) = app.get_webview_window("widget") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            }
-        })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                WindowEvent::Focused(false) if window.label() == "tray-panel" => {
+                    let resizing = window
+                        .state::<AppState>()
+                        .panel_resize_active
+                        .load(Ordering::Acquire);
+                    let cursor_inside = window
+                        .cursor_position()
+                        .ok()
+                        .zip(window.outer_position().ok())
+                        .zip(window.outer_size().ok())
+                        .is_some_and(|((cursor, position), size)| {
+                            cursor.x >= position.x as f64
+                                && cursor.x < (position.x + size.width as i32) as f64
+                                && cursor.y >= position.y as f64
+                                && cursor.y < (position.y + size.height as i32) as f64
+                        });
+                    if !resizing && !cursor_inside {
+                        let _ = window.hide();
+                    }
+                }
+                WindowEvent::Resized(_) if window.label() == "tray-panel" => {
+                    let state = window.state::<AppState>();
+                    if state.panel_resize_active.load(Ordering::Acquire) {
+                        let generation = state
+                            .panel_resize_generation
+                            .fetch_add(1, Ordering::Relaxed)
+                            + 1;
+                        finish_panel_resize_after(
+                            window.app_handle().clone(),
+                            generation,
+                            Duration::from_millis(600),
+                        );
+                    }
+                }
+                WindowEvent::Moved(position) if window.label() == "widget" => {
+                    let _ = window.emit(
+                        "widget-motion",
+                        WidgetMotionPayload {
+                            x: position.x,
+                            y: position.y,
+                        },
+                    );
+                }
+                _ => {}
             }
         })
         .build(tauri::generate_context!())
-        .expect("failed to build Quota Float");
+        .expect("failed to build Token Bubble");
     app.run(|app_handle, event| {
         if matches!(event, tauri::RunEvent::Resumed) {
-            let _ = app_handle.emit_to("widget", "refresh-requested", ());
+            let _ = app_handle.emit("refresh-requested", ());
         }
     });
 }

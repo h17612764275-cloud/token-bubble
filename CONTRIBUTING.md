@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve Quota Float.
+Thanks for helping improve Token Bubble.
 
 ## Before Opening Issues
 
