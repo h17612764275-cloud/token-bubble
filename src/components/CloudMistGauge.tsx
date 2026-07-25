@@ -81,7 +81,9 @@ export const CloudMistGauge = memo(function CloudMistGauge({ level }: Props) {
       const w = rect.width;
       const h = rect.height;
       const quota = Math.min(1, Math.max(0, levelRef.current / 100));
-      const visualFraction = quota <= 0 ? 0 : .12 + quota * .68;
+      // Keep both mist layers proportional to the real remaining quota. The
+      // slight overscan at 100% removes the empty antialiased strip at the rim.
+      const visualFraction = quota <= 0 ? 0 : Math.min(1.08, quota * 1.08);
       if (visualFraction <= 0) {
         frame = window.requestAnimationFrame(draw);
         return;
@@ -108,7 +110,8 @@ export const CloudMistGauge = memo(function CloudMistGauge({ level }: Props) {
       context.fillStyle = body;
       context.fillRect(0, Math.max(0, baseY - feather), w, h - baseY + feather);
 
-      const cloudCount = 6;
+      const cloudCount = 4 + Math.round(quota * 4);
+      const cloudAlpha = .32 + quota * .14;
       for (let index = 0; index < cloudCount; index += 1) {
         const normalizedX = (index + .35) / (cloudCount - .3);
         const x = w * normalizedX + Math.sin(ambientPhase * 1.7 + index * 1.41) * .88 - tilt * .42;
@@ -116,13 +119,16 @@ export const CloudMistGauge = memo(function CloudMistGauge({ level }: Props) {
         const wave = Math.sin(index * 1.33 + ambientPhase * 2.2) * (settled ? .58 : Math.min(4.1, motionEnergy * 5.2));
         const radiusX = w * (.2 + (index % 3) * .025);
         const radiusY = h * (.115 + ((index + 1) % 3) * .015);
-        drawSoftCloud(context, x, baseY + slope + wave + drift + verticalSurge, radiusX, radiusY, .42);
+        drawSoftCloud(context, x, baseY + slope + wave + drift + verticalSurge, radiusX, radiusY, cloudAlpha);
       }
 
-      for (let index = 0; index < 4; index += 1) {
-        const x = w * (.18 + index * .22) + Math.cos(ambientPhase * 1.2 + index * 1.8) * .68 - tilt * .18;
+      const lowerCloudCount = 3 + Math.round(quota * 2);
+      const lowerCloudAlpha = .2 + quota * .1;
+      for (let index = 0; index < lowerCloudCount; index += 1) {
+        const normalizedX = lowerCloudCount === 1 ? .5 : .16 + index * (.68 / (lowerCloudCount - 1));
+        const x = w * normalizedX + Math.cos(ambientPhase * 1.2 + index * 1.8) * .68 - tilt * .18;
         const y = baseY + feather * (.72 + (index % 2) * .48) + drift * .58 + verticalSurge * .72;
-        drawSoftCloud(context, x, y, w * .28, h * .18, .28);
+        drawSoftCloud(context, x, y, w * .28, h * .18, lowerCloudAlpha);
       }
 
       frame = window.requestAnimationFrame(draw);
