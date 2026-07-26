@@ -81,9 +81,9 @@ export const CloudMistGauge = memo(function CloudMistGauge({ level }: Props) {
       const w = rect.width;
       const h = rect.height;
       const quota = Math.min(1, Math.max(0, levelRef.current / 100));
-      // Keep both mist layers proportional to the real remaining quota. The
-      // slight overscan at 100% removes the empty antialiased strip at the rim.
-      const visualFraction = quota <= 0 ? 0 : Math.min(1.08, quota * 1.08);
+      // Leave visible headroom below 100%; only a truly full quota overscans
+      // the rim to remove the empty antialiased strip.
+      const visualFraction = quota <= 0 ? 0 : quota >= 1 ? 1.08 : quota * .94;
       if (visualFraction <= 0) {
         frame = window.requestAnimationFrame(draw);
         return;
