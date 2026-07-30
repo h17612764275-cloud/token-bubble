@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef } from "react";
 import { listenWidgetMotion } from "../lib/bridge";
+import { getCloudMistProfile } from "../lib/cloudMistProfile";
 import { applyLiquidMotion, initialLiquidPhysics, stepLiquidPhysics } from "../lib/liquidPhysics";
 
 interface Props {
@@ -80,10 +81,13 @@ export const CloudMistGauge = memo(function CloudMistGauge({ level }: Props) {
 
       const w = rect.width;
       const h = rect.height;
-      const quota = Math.min(1, Math.max(0, levelRef.current / 100));
-      // Leave visible headroom below 100%; only a truly full quota overscans
-      // the rim to remove the empty antialiased strip.
-      const visualFraction = quota <= 0 ? 0 : quota >= 1 ? 1.08 : quota * .94;
+      const {
+        visualFraction,
+        cloudCount,
+        cloudAlpha,
+        lowerCloudCount,
+        lowerCloudAlpha,
+      } = getCloudMistProfile(levelRef.current);
       if (visualFraction <= 0) {
         frame = window.requestAnimationFrame(draw);
         return;
@@ -110,8 +114,6 @@ export const CloudMistGauge = memo(function CloudMistGauge({ level }: Props) {
       context.fillStyle = body;
       context.fillRect(0, Math.max(0, baseY - feather), w, h - baseY + feather);
 
-      const cloudCount = 4 + Math.round(quota * 4);
-      const cloudAlpha = .32 + quota * .14;
       for (let index = 0; index < cloudCount; index += 1) {
         const normalizedX = (index + .35) / (cloudCount - .3);
         const x = w * normalizedX + Math.sin(ambientPhase * 1.7 + index * 1.41) * .88 - tilt * .42;
@@ -122,26 +124,11 @@ export const CloudMistGauge = memo(function CloudMistGauge({ level }: Props) {
         drawSoftCloud(context, x, baseY + slope + wave + drift + verticalSurge, radiusX, radiusY, cloudAlpha);
       }
 
-      const lowerCloudCount = 3 + Math.round(quota * 2);
-      const lowerCloudAlpha = .2 + quota * .1;
       for (let index = 0; index < lowerCloudCount; index += 1) {
         const normalizedX = lowerCloudCount === 1 ? .5 : .16 + index * (.68 / (lowerCloudCount - 1));
         const x = w * normalizedX + Math.cos(ambientPhase * 1.2 + index * 1.8) * .68 - tilt * .18;
         const y = baseY + feather * (.72 + (index % 2) * .48) + drift * .58 + verticalSurge * .72;
         drawSoftCloud(context, x, y, w * .28, h * .18, lowerCloudAlpha);
-      }
-
-      if (quota < 1) {
-        const clearUntil = Math.max(0, baseY * .85);
-        const opaqueFrom = Math.min(h, Math.max(clearUntil + 1, baseY + Math.min(5, h * .08)));
-        const quotaMask = context.createLinearGradient(0, clearUntil, 0, opaqueFrom);
-        quotaMask.addColorStop(0, "rgba(0,0,0,0)");
-        quotaMask.addColorStop(1, "rgba(0,0,0,1)");
-        context.save();
-        context.globalCompositeOperation = "destination-in";
-        context.fillStyle = quotaMask;
-        context.fillRect(0, 0, w, h);
-        context.restore();
       }
 
       frame = window.requestAnimationFrame(draw);

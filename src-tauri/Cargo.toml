@@ -1,6 +1,6 @@
 [package]
 name = "token-bubble"
-version = "0.1.5"
+version = "0.1.6"
 description = "Token Bubble Codex quota and usage monitor"
 authors = ["Token Bubble contributors"]
 license = "MIT"

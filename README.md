@@ -9,7 +9,7 @@ Token Bubble 基于 **Quota Float** 开发，并集成 **CodexScope** 的本地�
 ## 下载
 
 - [下载最新版安装包](https://github.com/h17612764275-cloud/token-bubble/releases/latest)
-- 当前版本：`v0.1.5`
+- 当前版本：`v0.1.6`
 - Windows 用户下载 Release 中的 `.exe` 安装包。
 
 ## 界面预览

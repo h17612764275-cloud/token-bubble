@@ -9,7 +9,7 @@ Token Bubble is derived from **Quota Float** and integrates **CodexScope** for l
 ## Download
 
 - [Download the latest installer](https://github.com/h17612764275-cloud/token-bubble/releases/latest)
-- Current version: `v0.1.5`
+- Current version: `v0.1.6`
 - Windows users should download the `.exe` installer from the Release.
 
 ## Interface preview
