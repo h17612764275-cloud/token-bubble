@@ -190,7 +190,7 @@ export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, onOp
     "--orb-badge-height": `${17 * scale}px`,
     "--orb-badge-font-size": `${12 * scale}px`,
     "--orb-badge-line-height": `${12 * scale}px`,
-    "--bubble-cloud-top": `${displayPercent === null ? 100 : displayPercent >= 100 ? -4 : 100 - displayPercent * .94}%`,
+    "--bubble-cloud-top": `${displayPercent === null ? 100 : displayPercent >= 100 ? -10 : 100 - displayPercent * .94}%`,
     "--theme-accent": widgetAccent,
   } as CSSProperties;
 

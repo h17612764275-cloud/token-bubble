@@ -565,8 +565,8 @@ button { font: inherit; }
   z-index: 1;
   opacity: .72;
   filter: saturate(1.34) contrast(1.025) brightness(.99);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0 calc(var(--bubble-cloud-top) - 10%), rgba(0,0,0,.2) calc(var(--bubble-cloud-top) - 4%), #000 calc(var(--bubble-cloud-top) + 8%) 100%);
-  mask-image: linear-gradient(to bottom, transparent 0 calc(var(--bubble-cloud-top) - 10%), rgba(0,0,0,.2) calc(var(--bubble-cloud-top) - 4%), #000 calc(var(--bubble-cloud-top) + 8%) 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0 var(--bubble-cloud-top), rgba(0,0,0,.2) calc(var(--bubble-cloud-top) + 4%), #000 calc(var(--bubble-cloud-top) + 10%) 100%);
+  mask-image: linear-gradient(to bottom, transparent 0 var(--bubble-cloud-top), rgba(0,0,0,.2) calc(var(--bubble-cloud-top) + 4%), #000 calc(var(--bubble-cloud-top) + 10%) 100%);
   animation: bubble-cloud-breathe 11s ease-in-out infinite alternate;
 }
 .orb-bubble-rim {

@@ -131,6 +131,19 @@ export const CloudMistGauge = memo(function CloudMistGauge({ level }: Props) {
         drawSoftCloud(context, x, y, w * .28, h * .18, lowerCloudAlpha);
       }
 
+      if (quota < 1) {
+        const clearUntil = Math.max(0, baseY * .85);
+        const opaqueFrom = Math.min(h, Math.max(clearUntil + 1, baseY + Math.min(5, h * .08)));
+        const quotaMask = context.createLinearGradient(0, clearUntil, 0, opaqueFrom);
+        quotaMask.addColorStop(0, "rgba(0,0,0,0)");
+        quotaMask.addColorStop(1, "rgba(0,0,0,1)");
+        context.save();
+        context.globalCompositeOperation = "destination-in";
+        context.fillStyle = quotaMask;
+        context.fillRect(0, 0, w, h);
+        context.restore();
+      }
+
       frame = window.requestAnimationFrame(draw);
     };
 
