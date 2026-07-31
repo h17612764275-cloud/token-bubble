@@ -1,5 +1,5 @@
 import { useMemo, useState, type CSSProperties } from "react";
-import type { ProviderSnapshot, WidgetPreferences } from "../types";
+import type { ProviderSnapshot, VoiceStatus, WidgetPreferences } from "../types";
 import { QuotaCard, QuotaOrb } from "./QuotaCard";
 
 const preview: ProviderSnapshot = {
@@ -14,7 +14,7 @@ const preview: ProviderSnapshot = {
   status: "ok",
   message: null,
 };
-const preferences: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#6f7cff", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: "codex", autoRotateSeconds: 12, language: "en" };
+const preferences: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#6f7cff", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: "codex", autoRotateSeconds: 12, language: "en", voiceEnabled: false, voiceShortcut: "Ctrl+Space", voiceInputDevice: null, voiceSensitivity: 65 };
 
 interface Values {
   radius: number;
@@ -94,6 +94,32 @@ export function DesignPlayground() {
   const update = <K extends keyof Values>(key: K, value: Values[K]) => setValues((current) => ({ ...current, [key]: value }));
 
   if (screenshotMode) {
+    if (shotKind === "voice-states") {
+      const states: VoiceStatus[] = ["standby", "starting", "listening"];
+      return (
+        <div className="screenshot-stage screenshot-stage--voice-states" style={style}>
+          {states.map((status) => (
+            <figure key={status}>
+              <div className="design-orb-frame">
+                <QuotaOrb snapshot={activePreview} language="zh-CN" accentColor={preferences.accentColor} voiceEvent={{ status, level: .72 }} onDrag={() => {}} onHover={() => {}} />
+              </div>
+              <figcaption>{status === "standby" ? "待命" : status === "starting" ? "启动中" : "聆听中"}</figcaption>
+            </figure>
+          ))}
+        </div>
+      );
+    }
+    if (shotKind === "voice") {
+      const requested = params.get("voice");
+      const status: VoiceStatus = requested === "starting" || requested === "listening" || requested === "recognizing" ? requested : "standby";
+      return (
+        <div className="screenshot-stage screenshot-stage--orb" style={style}>
+          <div className="design-orb-frame">
+            <QuotaOrb snapshot={activePreview} language="zh-CN" accentColor={preferences.accentColor} voiceEvent={{ status, level: .72 }} onDrag={() => {}} onHover={() => {}} />
+          </div>
+        </div>
+      );
+    }
     if (shotKind === "states") {
       return (
         <div className="screenshot-stage screenshot-stage--states" style={style}>

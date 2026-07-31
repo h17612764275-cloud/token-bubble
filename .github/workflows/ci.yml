@@ -46,6 +46,9 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
+      - name: Fetch verified local voice models
+        shell: pwsh
+        run: ./scripts/fetch-voice-models.ps1
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: ${{ matrix.build-command }}
       - uses: actions/upload-artifact@v4

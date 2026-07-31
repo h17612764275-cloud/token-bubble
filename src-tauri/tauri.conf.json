@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Token Bubble 余量浮窗",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "identifier": "app.quotafloat.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -15,12 +15,12 @@
       {
         "label": "widget",
         "title": "Token Bubble 余量浮窗",
-        "width": 76,
-        "height": 76,
-        "minWidth": 76,
-        "minHeight": 76,
-        "maxWidth": 328,
-        "maxHeight": 328,
+        "width": 88,
+        "height": 88,
+        "minWidth": 88,
+        "minHeight": 88,
+        "maxWidth": 340,
+        "maxHeight": 340,
         "resizable": false,
         "decorations": false,
         "transparent": true,
@@ -64,7 +64,10 @@
     "copyright": "Copyright Token Bubble contributors",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "resources": {
-      "resources/codexscope/": "codexscope/"
+      "resources/codexscope/": "codexscope/",
+      "resources/asr/": "asr/",
+      "resources/punctuation/": "punctuation/",
+      "resources/VOICE_MODEL_NOTICES.md": "VOICE_MODEL_NOTICES.md"
     }
   }
 }

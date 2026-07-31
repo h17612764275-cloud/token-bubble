@@ -5,5 +5,5 @@ import { DesignPlayground } from "./components/DesignPlayground";
 import "./styles.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>{new URLSearchParams(window.location.search).has("designer") ? <DesignPlayground /> : <App />}</React.StrictMode>,
+  <React.StrictMode>{["designer", "shot"].some((key) => new URLSearchParams(window.location.search).has(key)) ? <DesignPlayground /> : <App />}</React.StrictMode>,
 );

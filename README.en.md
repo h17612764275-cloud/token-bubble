@@ -9,7 +9,7 @@ Token Bubble is derived from **Quota Float** and integrates **CodexScope** for l
 ## Download
 
 - [Download the latest installer](https://github.com/h17612764275-cloud/token-bubble/releases/latest)
-- Current version: `v0.1.6`
+- Current version: `v0.2.0`
 - Windows users should download the `.exe` installer from the Release.
 
 ## Interface preview
@@ -44,6 +44,12 @@ The floating widget matches the selected Bubble or Glass skin. It can be resized
 | --- | --- |
 | ![Token Bubble Bubble floating widget](docs/images/token-bubble-orb-bubble.png) | ![Token Bubble Glass floating widget](docs/images/token-bubble-orb-glass.png) |
 
+### Local real-time Chinese-English voice input
+
+Press a configurable shortcut once to start continuous recognition and again to stop. Text appears while you speak, with support for Chinese, English, and mixed speech plus automatic on-device punctuation. The shortcut, microphone, and activation sensitivity are configurable.
+
+![Token Bubble local voice input states](docs/images/token-bubble-voice-states.png)
+
 ## Features
 
 - Shows the remaining Codex quota, refresh time, and quota status.
@@ -55,6 +61,8 @@ The floating widget matches the selected Bubble or Glass skin. It can be resized
 - Resizes the floating widget, locks its position, and keeps it on top.
 - Stores a membership renewal date and shows the remaining days.
 - Provides tray actions for refresh and panel/widget visibility.
+- Provides fully local real-time Chinese-English voice input, automatic punctuation, and voice activity detection.
+- Tracks today's dictated characters and shows voice usage in the flippable 90-day heatmap.
 
 ## Usage
 
@@ -63,15 +71,17 @@ The floating widget matches the selected Bubble or Glass skin. It can be resized
 3. Select today, 7 days, or 30 days from the usage range.
 4. Use the controls to switch Bubble/Glass skins, open the color picker, resize the widget, or lock it in place.
 5. Select the renewal date at the top of the panel to set your membership renewal.
+6. Configure the voice shortcut, input device, and sensitivity; press the shortcut once to start and again to stop.
 
 ## Data and privacy
 
-Token Bubble reads the existing local Codex Desktop login state and queries quota in read-only mode. Token history, interface preferences, and the membership renewal date stay on the device.
+Token Bubble reads the existing local Codex Desktop login state and queries quota in read-only mode. Token history, voice-character totals, interface preferences, and the membership renewal date stay on the device. Speech recognition and punctuation run on-device.
 
 - It does not upload prompts, chats, or local usage history.
 - It includes no telemetry, analytics, or crash reporting.
 - It does not redeem reset credits or change account settings.
 - Local token totals support history and verification views; they do not replace service-provided quota values.
+- Microphone audio is neither uploaded nor saved; only final character counts are stored locally for usage statistics.
 
 See [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md) for the complete boundary.
 
@@ -81,7 +91,8 @@ Token Bubble is an independent derivative project and is not an official release
 
 - **Quota Float** provided the base desktop-widget architecture and Codex quota display.
 - **CodexScope** provided components used for local token-usage verification.
-- **Token Bubble** adds the new panel, skins, time ranges, token distribution, estimated cost, widget controls, and membership renewal setting.
+- **sherpa-onnx / Paraformer** provides the local streaming Chinese-English recognition and punctuation runtime and models.
+- **Token Bubble** adds the new panel, skins, time ranges, token distribution, estimated cost, widget controls, membership renewal setting, and local voice input.
 
 See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for license and attribution details.
 
@@ -91,6 +102,7 @@ Requires Node.js 20+, Rust stable, and the Tauri 2 system dependencies for your 
 
 ```bash
 npm install
+npm run models:fetch
 npm run test
 npm run build
 npm run tauri dev

@@ -1,21 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QuotaCard, QuotaOrb } from "./components/QuotaCard";
 import { TrayPanel } from "./components/TrayPanel";
-import { fetchSnapshots, getPreferences, listenDesktopEvents, resizeFloatingWidget, setWidgetExpanded, setWidgetPositionLocked, startDragging, toggleFloatingWidget, togglePanelFromWidget, updatePreferences } from "./lib/bridge";
+import { fetchSnapshots, getPreferences, listenDesktopEvents, registerVoiceShortcut, resizeFloatingWidget, setWidgetExpanded, setWidgetPositionLocked, startDragging, startVoice, stopVoice, toggleFloatingWidget, togglePanelFromWidget, updatePreferences } from "./lib/bridge";
 import { needsFastRefresh } from "./lib/format";
 import { checkForAppUpdate } from "./lib/appUpdate";
 import { copy, normalizeLanguage } from "./lib/i18n";
 import { mergeSnapshots } from "./lib/snapshots";
 import { recordDailyUsage } from "./lib/dailyUsage";
 import { withPanelAccentColor, withWidgetStyle } from "./lib/skin";
-import type { ProviderSnapshot, WidgetPreferences } from "./types";
+import { recordVoiceText } from "./lib/voiceHistory";
+import type { ProviderSnapshot, VoiceEvent, WidgetPreferences } from "./types";
 
-const DEFAULT_PREFS: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#6f7cff", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: null, autoRotateSeconds: 12, language: "zh-CN" };
+const DEFAULT_PREFS: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#6f7cff", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: null, autoRotateSeconds: 12, language: "zh-CN", voiceEnabled: false, voiceShortcut: "Ctrl+Space", voiceInputDevice: null, voiceSensitivity: 65 };
 
 export default function App() {
   const isTrayPanel = new URLSearchParams(window.location.search).get("view") === "tray";
   const [snapshots, setSnapshots] = useState<ProviderSnapshot[]>([]);
   const [preferences, setPreferences] = useState(DEFAULT_PREFS);
+  const [voiceEvent, setVoiceEvent] = useState<VoiceEvent>({ status: "disabled", level: 0 });
+  const [voiceRevision, setVoiceRevision] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const [hovered, setHovered] = useState(false);
   const [compact, setCompact] = useState(true);
@@ -27,6 +30,7 @@ export default function App() {
   const consumptionTimers = useRef(new Map<string, number>());
   const collapseTimer = useRef<number | null>(null);
   const hoverSequence = useRef(0);
+  const preferencesRef = useRef(preferences);
   const language = normalizeLanguage(preferences.language);
   const t = copy[language];
 
@@ -90,11 +94,54 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     let cleanup: () => void = () => {};
-    void listenDesktopEvents({ onPreferences: (value) => setPreferences({ ...DEFAULT_PREFS, ...value, language: normalizeLanguage(value.language) }), onRefresh: () => void refresh(true), onUpdate: () => checkUpdate(true) }).then((value) => {
+    void listenDesktopEvents({
+      onPreferences: (value) => setPreferences({ ...DEFAULT_PREFS, ...value, language: normalizeLanguage(value.language) }),
+      onRefresh: () => void refresh(true),
+      onUpdate: () => checkUpdate(true),
+      onVoice: (value) => {
+        setVoiceEvent(value);
+        if (value.finalText) {
+          if (!isTrayPanel) recordVoiceText(value.finalText);
+          window.setTimeout(() => setVoiceRevision((revision) => revision + 1), 0);
+        }
+        if (value.message) setOperationError(value.message);
+      },
+    }).then((value) => {
       if (cancelled) value(); else cleanup = value;
     }).catch(() => setOperationError("Desktop event listener failed to start."));
     return () => { cancelled = true; cleanup(); };
-  }, [checkUpdate, refresh]);
+  }, [checkUpdate, isTrayPanel, refresh]);
+
+  useEffect(() => {
+    if (isTrayPanel) return;
+    setVoiceEvent((current) => ({ ...current, status: preferences.voiceEnabled ? "starting" : "disabled", level: 0 }));
+    void (preferences.voiceEnabled ? stopVoice().then(() => startVoice()) : stopVoice())
+      .catch(() => setOperationError(preferences.voiceEnabled ? "语音模式启动失败。" : "语音模式停止失败。"));
+  }, [isTrayPanel, preferences.voiceEnabled, preferences.voiceInputDevice, preferences.voiceSensitivity]);
+
+  useEffect(() => {
+    preferencesRef.current = preferences;
+  }, [preferences]);
+
+  useEffect(() => {
+    if (isTrayPanel) return;
+    let cancelled = false;
+    let dispose: (() => Promise<void>) | undefined;
+    void registerVoiceShortcut(preferences.voiceShortcut, () => {
+      const previous = preferencesRef.current;
+      const next = { ...previous, voiceEnabled: !previous.voiceEnabled };
+      preferencesRef.current = next;
+      setPreferences(next);
+      setOperationError(null);
+      void updatePreferences(next).catch(() => {
+        preferencesRef.current = previous;
+        setPreferences(previous);
+        setOperationError("语音快捷键状态保存失败。");
+      });
+    }).then((cleanup) => { if (cancelled) void cleanup(); else dispose = cleanup; })
+      .catch(() => { if (!cancelled) setOperationError(`快捷键 ${preferences.voiceShortcut} 已被占用，请在设置中更换。`); });
+    return () => { cancelled = true; if (dispose) void dispose(); };
+  }, [isTrayPanel, preferences.voiceShortcut]);
 
   useEffect(() => {
     if (isTrayPanel) return;
@@ -135,9 +182,10 @@ export default function App() {
 
   const savePreferences = useCallback((next: WidgetPreferences) => {
     const previous = preferences;
+    preferencesRef.current = next;
     setPreferences(next);
     setOperationError(null);
-    void updatePreferences(next).catch(() => { setPreferences(previous); setOperationError("Settings could not be saved. Previous state restored."); });
+    void updatePreferences(next).catch(() => { preferencesRef.current = previous; setPreferences(previous); setOperationError("Settings could not be saved. Previous state restored."); });
   }, [preferences]);
 
   const handleHover = useCallback((value: boolean) => {
@@ -185,9 +233,12 @@ export default function App() {
           const next = withWidgetStyle(preferences, widgetStyle);
           return updatePreferences(next).then(() => setPreferences(next));
         }}
+        voiceEvent={voiceEvent}
+        voiceRevision={voiceRevision}
+        onVoicePreferencesChange={(voiceEnabled, voiceShortcut, voiceInputDevice, voiceSensitivity) => savePreferences({ ...preferences, voiceEnabled, voiceShortcut, voiceInputDevice, voiceSensitivity })}
       />
     );
   }
 
-  return <QuotaOrb snapshot={current} language={language} positionLocked={preferences.positionLocked} widgetSize={preferences.widgetSize} accentColor={preferences.accentColor} widgetStyle={preferences.widgetStyle} onDrag={() => startDragging()} onHover={() => undefined} onOpenPanel={() => togglePanelFromWidget()} />;
+  return <QuotaOrb snapshot={current} language={language} positionLocked={preferences.positionLocked} widgetSize={preferences.widgetSize} accentColor={preferences.accentColor} widgetStyle={preferences.widgetStyle} voiceEvent={voiceEvent} onDrag={() => startDragging()} onHover={() => undefined} onOpenPanel={() => togglePanelFromWidget()} />;
 }

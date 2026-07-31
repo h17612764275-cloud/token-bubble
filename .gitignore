@@ -36,3 +36,6 @@ token.json
 .tauri-updater.key
 !/src-tauri/resources/codexscope/CodexScope Files/bin/codexscope-windows-amd64.exe
 /效果/
+/src-tauri/resources/asr/*.onnx
+/src-tauri/resources/asr/tokens.txt
+/src-tauri/resources/punctuation/*.onnx

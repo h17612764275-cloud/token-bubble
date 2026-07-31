@@ -1,6 +1,7 @@
 mod codex;
 mod local_usage;
 mod models;
+mod voice;
 
 use std::{
     fs,
@@ -25,18 +26,46 @@ use tauri::{
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_window_state::Builder as WindowStateBuilder;
+use voice::VoiceManager;
 
 const DEFAULT_COLLAPSED_LOGICAL_SIZE: f64 = 68.0;
 const MIN_COLLAPSED_LOGICAL_SIZE: f64 = 52.0;
 const MAX_COLLAPSED_LOGICAL_SIZE: f64 = 100.0;
 const COLLAPSED_SIZE_STEP: f64 = 8.0;
 const EXPANDED_LOGICAL_SIZE: f64 = 320.0;
-const EDGE_SAFE_INSET_LOGICAL: f64 = 4.0;
+const EDGE_SAFE_INSET_LOGICAL: f64 = 10.0;
 const SNAP_THRESHOLD_LOGICAL: f64 = 24.0;
 const POSITION_EPSILON: u32 = 2;
 const TRAY_PANEL_LOGICAL_WIDTH: f64 = 380.0;
 const TRAY_PANEL_LOGICAL_HEIGHT: f64 = 504.0;
 const TRAY_PANEL_GAP_LOGICAL: f64 = 10.0;
+
+#[tauri::command]
+fn start_voice(app: AppHandle, voice: State<'_, VoiceManager>, state: State<'_, AppState>) -> Result<bool, String> {
+    let target = voice::preferred_text_target();
+    let preferences = state
+        .preferences
+        .lock()
+        .map_err(|_| "语音输入设置不可用".to_string())?;
+    let input_device = preferences.voice_input_device.clone();
+    let sensitivity = preferences.voice_sensitivity;
+    drop(preferences);
+    if let Some(panel) = app.get_webview_window("tray-panel") {
+        let _ = panel.hide();
+    }
+    voice::focus_text_target(target);
+    voice.start(app, target, input_device, sensitivity)
+}
+
+#[tauri::command]
+fn stop_voice(voice: State<'_, VoiceManager>) {
+    voice.stop();
+}
+
+#[tauri::command]
+fn get_voice_input_devices() -> Result<Vec<String>, String> {
+    voice::input_device_names()
+}
 
 fn copy_directory(source: &Path, target: &Path) -> Result<(), String> {
     fs::create_dir_all(target).map_err(|error| error.to_string())?;
@@ -726,7 +755,7 @@ mod geometry_tests {
 
     #[test]
     fn window_size_includes_the_transparent_safe_inset() {
-        assert_eq!(window_size_for_visual_size(68, 4), 76);
+        assert_eq!(window_size_for_visual_size(68, EDGE_SAFE_INSET_LOGICAL as u32), 88);
         assert_eq!(widget_window_size(320.0, 1.5, 6), 492);
     }
 
@@ -1459,6 +1488,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("widget") {
                 let _ = window.show();
@@ -1473,7 +1503,9 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_config_dir()?;
             let preferences_path = data_dir.join("preferences.json");
-            let preferences = load_preferences(&preferences_path);
+            let mut preferences = load_preferences(&preferences_path);
+            preferences.voice_enabled = false;
+            let voice_model_dir = app.path().resource_dir()?.join("asr");
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(12))
                 .redirect(reqwest::redirect::Policy::none())
@@ -1493,6 +1525,7 @@ pub fn run() {
                 panel_resize_active: AtomicBool::new(false),
                 panel_resize_generation: AtomicU64::new(0),
             });
+            app.manage(VoiceManager::new(voice_model_dir));
             if setup_tray(app).is_err() {
                 eprintln!("tray setup failed; enabling taskbar fallback");
                 if let Some(window) = app.get_webview_window("widget") {
@@ -1529,6 +1562,9 @@ pub fn run() {
             begin_panel_resize,
             end_panel_resize,
             toggle_panel_from_widget,
+            start_voice,
+            stop_voice,
+            get_voice_input_devices,
             quit_app
         ])
         .on_window_event(|window, event| {

@@ -5,6 +5,12 @@ CodexScope Windows dashboard and data generator as its data-verification module.
 Token Bubble is an independent derivative project and is not an official release
 of either upstream project.
 
+Token Bubble also bundles sherpa-onnx and converted Paraformer/CT-Transformer
+models for local Chinese-English speech recognition and punctuation. These
+components are distributed under the Apache License 2.0. Model provenance and
+hashes are documented in `src-tauri/resources/VOICE_MODEL_NOTICES.md` and
+`src-tauri/resources/asr/README.md`.
+
 Token Bubble 余量浮窗基于 Quota Float 开发，并集成了未经修改的 CodexScope
 Windows 仪表盘及数据生成器作为本地数据验证模块。本项目是独立的衍生项目，
 并非两个上游项目的官方版本。
@@ -32,6 +38,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## sherpa-onnx and voice models
+
+Apache License 2.0
+
+- Runtime: https://github.com/k2-fsa/sherpa-onnx
+- Streaming ASR: `sherpa-onnx-streaming-paraformer-bilingual-zh-en`
+- Punctuation: `sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8`
+- License: https://www.apache.org/licenses/LICENSE-2.0
 
 ## CodexScope
 

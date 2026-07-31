@@ -1,6 +1,6 @@
-import type { ProviderSnapshot, WidgetPreferences } from "../types";
+import type { ProviderSnapshot, VoiceEvent, WidgetPreferences } from "../types";
 
-const defaultPreferences: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#6f7cff", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: null, autoRotateSeconds: 12, language: "zh-CN" };
+const defaultPreferences: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#6f7cff", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: null, autoRotateSeconds: 12, language: "zh-CN", voiceEnabled: false, voiceShortcut: "Ctrl+Space", voiceInputDevice: null, voiceSensitivity: 65 };
 
 const mockSnapshot: ProviderSnapshot = {
   provider: "codex",
@@ -144,6 +144,31 @@ export async function togglePanelFromWidget(): Promise<boolean> {
   return invoke<boolean>("toggle_panel_from_widget");
 }
 
+export async function startVoice(): Promise<boolean> {
+  if (!isTauri()) return true;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<boolean>("start_voice");
+}
+
+export async function stopVoice(): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("stop_voice");
+}
+
+export async function getVoiceInputDevices(): Promise<string[]> {
+  if (!isTauri()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string[]>("get_voice_input_devices");
+}
+
+export async function registerVoiceShortcut(shortcut: string, handler: () => void): Promise<() => Promise<void>> {
+  if (!isTauri()) return async () => undefined;
+  const { register, unregister } = await import("@tauri-apps/plugin-global-shortcut");
+  await register(shortcut, (event) => { if (event.state === "Pressed") handler(); });
+  return () => unregister(shortcut);
+}
+
 export async function quitApp(): Promise<void> {
   if (!isTauri()) return;
   const { invoke } = await import("@tauri-apps/api/core");
@@ -201,11 +226,13 @@ export async function listenDesktopEvents(handlers: {
   onPreferences: (value: WidgetPreferences) => void;
   onRefresh: () => void;
   onUpdate: () => void;
+  onVoice?: (value: VoiceEvent) => void;
 }): Promise<() => void> {
   if (!isTauri()) return () => undefined;
   const { listen } = await import("@tauri-apps/api/event");
   const unlistenPreferences = await listen<WidgetPreferences>("preferences-changed", (event) => handlers.onPreferences(event.payload));
   const unlistenRefresh = await listen("refresh-requested", handlers.onRefresh);
   const unlistenUpdate = await listen("update-check-requested", handlers.onUpdate);
-  return () => { unlistenPreferences(); unlistenRefresh(); unlistenUpdate(); };
+  const unlistenVoice = handlers.onVoice ? await listen<VoiceEvent>("voice-event", (event) => handlers.onVoice?.(event.payload)) : () => undefined;
+  return () => { unlistenPreferences(); unlistenRefresh(); unlistenUpdate(); unlistenVoice(); };
 }

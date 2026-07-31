@@ -11,14 +11,36 @@ const api = vi.hoisted(() => ({
     workArea: { position: { x: 0, y: 0 }, size: { width: 1920, height: 1040 } },
   })),
 }));
+const shortcut = vi.hoisted(() => ({
+  listener: null as null | ((event: { state: string }) => void),
+  register: vi.fn(async (_keys: string, listener: (event: { state: string }) => void) => { shortcut.listener = listener; }),
+  unregister: vi.fn(async () => undefined),
+}));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: api.invoke }));
 vi.mock("@tauri-apps/api/window", () => ({ currentMonitor: api.currentMonitor }));
+vi.mock("@tauri-apps/plugin-global-shortcut", () => ({ register: shortcut.register, unregister: shortcut.unregister }));
 
 beforeEach(() => {
   vi.clearAllMocks();
   api.calls.length = 0;
+  shortcut.listener = null;
   vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+});
+
+describe("voice shortcut", () => {
+  it("toggles once on press and does nothing on release", async () => {
+    const handler = vi.fn();
+    const { registerVoiceShortcut } = await import("./bridge");
+    const dispose = await registerVoiceShortcut("Ctrl+Space", handler);
+
+    shortcut.listener?.({ state: "Pressed" });
+    shortcut.listener?.({ state: "Released" });
+
+    expect(handler).toHaveBeenCalledOnce();
+    await dispose();
+    expect(shortcut.unregister).toHaveBeenCalledWith("Ctrl+Space");
+  });
 });
 
 describe("widget transitions", () => {

@@ -15,6 +15,7 @@ Please do not open public issues containing tokens, account IDs, raw backend res
 - The app caps auth file reads at 256 KB and quota responses at 1 MB.
 - The app does not follow redirects for quota HTTP requests.
 - The app does not redeem reset credits or change account settings.
+- Microphone audio is processed in memory by bundled local models and is neither uploaded nor saved.
 
 ## Release Notes For Maintainers
 

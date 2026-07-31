@@ -131,6 +131,14 @@ pub struct WidgetPreferences {
     pub auto_rotate_seconds: u64,
     #[serde(default = "default_language")]
     pub language: String,
+    #[serde(default)]
+    pub voice_enabled: bool,
+    #[serde(default = "default_voice_shortcut")]
+    pub voice_shortcut: String,
+    #[serde(default)]
+    pub voice_input_device: Option<String>,
+    #[serde(default = "default_voice_sensitivity")]
+    pub voice_sensitivity: f32,
 }
 
 fn default_always_on_top() -> bool {
@@ -151,7 +159,12 @@ fn default_widget_style() -> String {
 fn default_language() -> String {
     "zh-CN".into()
 }
-
+fn default_voice_shortcut() -> String {
+    "Ctrl+Space".into()
+}
+fn default_voice_sensitivity() -> f32 {
+    65.0
+}
 impl Default for WidgetPreferences {
     fn default() -> Self {
         Self {
@@ -166,6 +179,10 @@ impl Default for WidgetPreferences {
             pinned_provider: None,
             auto_rotate_seconds: 12,
             language: default_language(),
+            voice_enabled: false,
+            voice_shortcut: default_voice_shortcut(),
+            voice_input_device: None,
+            voice_sensitivity: default_voice_sensitivity(),
         }
     }
 }
@@ -197,6 +214,18 @@ impl WidgetPreferences {
         if self.language != "en" && self.language != "zh-CN" {
             self.language = default_language();
         }
+        if self.voice_shortcut.trim().is_empty() || self.voice_shortcut.len() > 64 {
+            self.voice_shortcut = default_voice_shortcut();
+        }
+        self.voice_input_device = self.voice_input_device.and_then(|value| {
+            let value = value.trim();
+            (!value.is_empty()).then(|| value.to_string())
+        });
+        self.voice_sensitivity = if self.voice_sensitivity.is_finite() {
+            self.voice_sensitivity.clamp(0.0, 100.0)
+        } else {
+            default_voice_sensitivity()
+        };
         self
     }
 }
@@ -226,6 +255,10 @@ mod preference_tests {
 
         assert_eq!(value.accent_color, "#c07090");
         assert_eq!(value.bubble_panel_accent_color, "#6f7cff");
+        assert!(!value.voice_enabled);
+        assert_eq!(value.voice_shortcut, "Ctrl+Space");
+        assert_eq!(value.voice_input_device, None);
+        assert_eq!(value.voice_sensitivity, 65.0);
     }
 
     #[test]

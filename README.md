@@ -9,7 +9,7 @@ Token Bubble 基于 **Quota Float** 开发，并集成 **CodexScope** 的本地�
 ## 下载
 
 - [下载最新版安装包](https://github.com/h17612764275-cloud/token-bubble/releases/latest)
-- 当前版本：`v0.1.6`
+- 当前版本：`v0.2.0`
 - Windows 用户下载 Release 中的 `.exe` 安装包。
 
 ## 界面预览
@@ -44,6 +44,12 @@ Bubble 和 Glass 两款面板都支持取色换色。打开取色器后，可以
 | --- | --- |
 | ![Token Bubble Bubble 浮窗](docs/images/token-bubble-orb-bubble.png) | ![Token Bubble Glass 浮窗](docs/images/token-bubble-orb-glass.png) |
 
+### 本地实时中英文语音输入
+
+按一次自定义快捷键开启持续识别，再按一次关闭。语音会边说边显示文字，支持中文、英文及中英混说，并通过本地模型自动补充标点。快捷键、麦克风设备和识别灵敏度均可设置。
+
+![Token Bubble 本地语音输入状态](docs/images/token-bubble-voice-states.png)
+
 ## 主要功能
 
 - 显示 Codex 周期剩余额度、刷新时间和额度状态。
@@ -55,6 +61,8 @@ Bubble 和 Glass 两款面板都支持取色换色。打开取色器后，可以
 - 调整浮窗大小、固定浮窗位置并保持窗口置顶。
 - 设置会员续费日期并显示距离续费还有多少天。
 - 从托盘快速刷新、显示或隐藏面板和浮窗。
+- 使用完全本地的中英文实时语音输入、自动标点和语音活动检测。
+- 统计今日语音输入字数，并在近90天热力图中查看语音用量。
 
 ## 使用说明
 
@@ -63,15 +71,17 @@ Bubble 和 Glass 两款面板都支持取色换色。打开取色器后，可以
 3. 点击面板中的用量范围，在今日、近7天和近30天之间切换。
 4. 使用右侧控制按钮切换 Bubble/Glass 皮肤、打开取色器、调整尺寸或固定浮窗。
 5. 点击顶部续费日期设置会员续费时间。
+6. 在语音栏设置快捷键、输入设备和灵敏度；按一次快捷键开启识别，再按一次关闭。
 
 ## 数据与隐私
 
-Token Bubble 在本机读取现有 Codex Desktop 登录状态，以只读方式查询额度。Token 用量历史、界面设置和会员续费日期保存在本地。
+Token Bubble 在本机读取现有 Codex Desktop 登录状态，以只读方式查询额度。Token 用量历史、语音字数统计、界面设置和会员续费日期保存在本地。语音识别和标点恢复均在本机运行。
 
 - 不上传提示词、聊天内容或本地用量历史。
 - 不记录遥测、分析数据或崩溃报告。
 - 不兑换重置额度，也不修改账户设置。
 - 本地 Token 统计用于历史和验证视图，不会替代服务端返回的真实额度。
+- 麦克风音频不会上传或保存；仅最终识别字数用于本地统计。
 
 完整边界请查看 [PRIVACY.md](PRIVACY.md) 和 [SECURITY.md](SECURITY.md)。
 
@@ -81,7 +91,8 @@ Token Bubble 是独立的衍生项目，并非 Quota Float 或 CodexScope 的官
 
 - **Quota Float**：提供了基础桌面浮窗架构与 Codex 额度展示能力。
 - **CodexScope**：提供了本地 Token 用量验证相关组件。
-- **Token Bubble**：在上述基础上增加了新的面板、皮肤、时间范围、Token 分布、估算花费、浮窗控制和会员续费设置。
+- **sherpa-onnx / Paraformer**：提供本地中英文流式识别和中英文标点恢复运行时及模型。
+- **Token Bubble**：在上述基础上增加了新的面板、皮肤、时间范围、Token 分布、估算花费、浮窗控制、会员续费设置和本地语音输入。
 
 许可证和第三方声明见 [LICENSE](LICENSE) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
@@ -91,6 +102,7 @@ Token Bubble 是独立的衍生项目，并非 Quota Float 或 CodexScope 的官
 
 ```bash
 npm install
+npm run models:fetch
 npm run test
 npm run build
 npm run tauri dev

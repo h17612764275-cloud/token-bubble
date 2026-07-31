@@ -3,7 +3,7 @@ import { memo, type CSSProperties, type ReactNode, useEffect, useMemo, useRef, u
 import { clampPercent, formatDateTime, formatResetDate, formatResetTime, quotaTier } from "../lib/format";
 import { copy, normalizeLanguage } from "../lib/i18n";
 import { FIXED_BUBBLE_WIDGET_ACCENT } from "../lib/skin";
-import type { Language, ProviderSnapshot, WidgetPreferences, WidgetStyle } from "../types";
+import type { Language, ProviderSnapshot, VoiceEvent, WidgetPreferences, WidgetStyle } from "../types";
 import { ProviderMark } from "./ProviderMark";
 import { CloudMistGauge } from "./CloudMistGauge";
 import { LiquidGauge } from "./LiquidGauge";
@@ -167,7 +167,7 @@ export const QuotaCard = memo(function QuotaCard({
   );
 });
 
-export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, onOpenPanel, language = "zh-CN", positionLocked = false, widgetSize = 68, accentColor = "#b97892", widgetStyle = "bubble" }: Pick<Props, "snapshot" | "onDrag" | "onHover" | "onOpenPanel"> & { language?: Language; positionLocked?: boolean; widgetSize?: number; accentColor?: string; widgetStyle?: WidgetStyle }) {
+export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, onOpenPanel, language = "zh-CN", positionLocked = false, widgetSize = 68, accentColor = "#b97892", widgetStyle = "bubble", voiceEvent = { status: "disabled", level: 0 } }: Pick<Props, "snapshot" | "onDrag" | "onHover" | "onOpenPanel"> & { language?: Language; positionLocked?: boolean; widgetSize?: number; accentColor?: string; widgetStyle?: WidgetStyle; voiceEvent?: VoiceEvent }) {
   const [idle, setIdle] = useState(false);
   const idleTimer = useRef<number | null>(null);
   const activeLanguage = normalizeLanguage(language);
@@ -180,6 +180,9 @@ export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, onOp
   const available = snapshot.status === "ok" && displayPercent !== null;
   const scale = Math.min(100, Math.max(52, widgetSize)) / 68;
   const widgetAccent = widgetStyle === "bubble" ? FIXED_BUBBLE_WIDGET_ACCENT : accentColor;
+  const voiceStarting = voiceEvent.status === "starting";
+  const voiceActive = voiceEvent.status === "listening" || voiceEvent.status === "recognizing";
+  const centerActive = voiceStarting || voiceActive;
   const responsiveStyle = {
     "--orb-number-size": `${31 * scale}px`,
     "--orb-percent-size": `${12 * scale}px`,
@@ -190,6 +193,7 @@ export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, onOp
     "--orb-badge-height": `${17 * scale}px`,
     "--orb-badge-font-size": `${12 * scale}px`,
     "--orb-badge-line-height": `${12 * scale}px`,
+    "--orb-visual-size": `${widgetSize}px`,
     "--bubble-cloud-top": `${displayPercent === null ? 100 : displayPercent >= 100 ? -10 : 100 - displayPercent * .94}%`,
     "--theme-accent": widgetAccent,
   } as CSSProperties;
@@ -209,7 +213,7 @@ export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, onOp
 
   return (
     <main
-      className={`quota-orb quota-orb--${widgetStyle} quota-card--${snapshot.status} quota-card--${tier}${displayingWeeklyAsPrimary ? " quota-orb--weekly" : ""}${idle ? " quota-orb--idle" : ""}`}
+      className={`quota-orb quota-orb--${widgetStyle} quota-card--${snapshot.status} quota-card--${tier}${displayingWeeklyAsPrimary ? " quota-orb--weekly" : ""}${idle ? " quota-orb--idle" : ""} quota-orb--voice-${voiceEvent.status}`}
       style={responsiveStyle}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={() => onHover(false)}
@@ -228,18 +232,30 @@ export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, onOp
       {widgetStyle === "bubble" ? <img className="orb-bubble-glass" src={bubbleGlass} alt="" aria-hidden="true" /> : null}
       {widgetStyle === "bubble" ? <img className="orb-bubble-cloud" src={bubbleCloud} alt="" aria-hidden="true" /> : null}
       {widgetStyle === "bubble" ? <img className="orb-bubble-rim" src={bubbleRim} alt="" aria-hidden="true" /> : null}
-      {available && widgetStyle === "bottle" ? <LiquidGauge level={displayPercent!} color={widgetAccent} /> : null}
-      {available && widgetStyle === "bubble" ? <CloudMistGauge level={displayPercent!} /> : null}
-      {available ? (
-        <section className="orb-metric">
-          <span>{displayPercent}</span>
-          <small>%</small>
-        </section>
-      ) : (
-        <section className="orb-unavailable">
-          <StatusIcon status={snapshot.status} />
-        </section>
-      )}
+      <div className="orb-balance">
+        {available && widgetStyle === "bottle" ? <LiquidGauge level={displayPercent!} color={widgetAccent} /> : null}
+        {available && widgetStyle === "bubble" ? <CloudMistGauge level={displayPercent!} /> : null}
+        {available ? (
+          <section className={`orb-metric${centerActive ? " is-hidden" : ""}`}>
+            <span>{displayPercent}</span>
+            <small>%</small>
+          </section>
+        ) : (
+          <section className={`orb-unavailable${centerActive ? " is-hidden" : ""}`}>
+            <StatusIcon status={snapshot.status} />
+          </section>
+        )}
+      </div>
+      <section className={`orb-voice${voiceActive ? " is-visible" : ""}`} aria-hidden={!voiceActive} aria-label={voiceEvent.status === "listening" ? "正在聆听" : "正在识别"}>
+          <div className="orb-waveform" aria-hidden="true">
+            {[.24, .42, .68, .5, 1, .7, .48, .58, .78, .52, .34, .22, .14].map((height, index) => (
+              <i key={index} style={{ "--index": index, "--voice-bar": `${Math.max(.12, height * (.45 + voiceEvent.level * .75)) * 100}%` } as CSSProperties} />
+            ))}
+          </div>
+      </section>
+      <section className={`orb-starting${voiceStarting ? " is-visible" : ""}`} aria-hidden={!voiceStarting} aria-label="正在启动语音识别">
+        <i /><i /><i />
+      </section>
     </main>
   );
 });

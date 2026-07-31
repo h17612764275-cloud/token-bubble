@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { WidgetPreferences } from "../types";
 import {
   FIXED_BUBBLE_WIDGET_ACCENT,
+  hexToRgb,
+  hsvToRgb,
   isDarkPanelColor,
   panelAccentColor,
+  rgbToHsv,
+  rgbToHex,
   widgetAccentColor,
   withPanelAccentColor,
   withWidgetStyle,
@@ -21,9 +25,19 @@ const preferences: WidgetPreferences = {
   pinnedProvider: null,
   autoRotateSeconds: 12,
   language: "zh-CN",
+  voiceEnabled: false,
+  voiceShortcut: "Ctrl+Space",
+  voiceInputDevice: null,
+  voiceSensitivity: 65,
 };
 
 describe("bound panel and widget skins", () => {
+  it("round-trips RGB values without a native color picker", () => {
+    expect(hexToRgb("#fd81ca")).toEqual([253, 129, 202]);
+    expect(rgbToHex(253, 129, 202)).toBe("#fd81ca");
+    expect(hsvToRgb(...rgbToHsv(253, 129, 202))).toEqual([253, 129, 202]);
+  });
+
   it("keeps flat-panel color linked to the bottle widget", () => {
     const recolored = withPanelAccentColor(preferences, "#3178c6");
     expect(panelAccentColor(recolored)).toBe("#3178c6");
