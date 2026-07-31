@@ -14,19 +14,21 @@ Token Bubble is derived from **Quota Float** and integrates **CodexScope** for l
 
 ## Interface preview
 
+All screenshots below are generated directly from the current `v0.2.0` interface.
+
 ### Two panel skins
 
 Token Bubble provides the Soap Bubble skin (Bubble) and the Glass Bottle skin (Glass). The panel and floating widget share the selected skin's material and visual style.
 
 | Soap Bubble skin (Bubble) | Glass Bottle skin (Glass) |
 | --- | --- |
-| ![Token Bubble Bubble skin panel and widget](docs/images/token-bubble-skin-bubble-overview.png) | ![Token Bubble Glass skin panel and widget](docs/images/token-bubble-skin-glass-overview.png) |
+| ![Token Bubble Bubble skin panel and widget](docs/images/token-bubble-skin-bubble-overview.png?v=0.2.0) | ![Token Bubble Glass skin panel and widget](docs/images/token-bubble-skin-glass-overview.png?v=0.2.0) |
 
 ### Custom colors for both skins
 
 Both the Bubble and Glass panels support custom colors. Open the color picker to choose a color from the field, hue bar, or RGB values.
 
-![Token Bubble panel color picker](docs/images/token-bubble-color-picker.png)
+![Token Bubble panel color picker](docs/images/token-bubble-color-picker.png?v=0.2.0)
 
 ### Today, last 7 days, and last 30 days
 
@@ -34,7 +36,7 @@ Switch the usage range between today, the last 7 days, and the last 30 days. The
 
 | Today | Last 7 days | Last 30 days |
 | --- | --- | --- |
-| ![Token Bubble token usage for today](docs/images/token-bubble-skin-bubble-today.png) | ![Token Bubble token usage for the last 7 days](docs/images/token-bubble-skin-bubble-7d.png) | ![Token Bubble token usage for the last 30 days](docs/images/token-bubble-skin-bubble-30d.png) |
+| ![Token Bubble token usage for today](docs/images/token-bubble-skin-bubble-today.png?v=0.2.0) | ![Token Bubble token usage for the last 7 days](docs/images/token-bubble-skin-bubble-7d.png?v=0.2.0) | ![Token Bubble token usage for the last 30 days](docs/images/token-bubble-skin-bubble-30d.png?v=0.2.0) |
 
 ### Floating widget
 
@@ -42,13 +44,13 @@ The floating widget matches the selected Bubble or Glass skin. It can be resized
 
 | Bubble widget | Glass widget |
 | --- | --- |
-| ![Token Bubble Bubble floating widget](docs/images/token-bubble-orb-bubble.png) | ![Token Bubble Glass floating widget](docs/images/token-bubble-orb-glass.png) |
+| ![Token Bubble Bubble floating widget](docs/images/token-bubble-orb-bubble.png?v=0.2.0) | ![Token Bubble Glass floating widget](docs/images/token-bubble-orb-glass.png?v=0.2.0) |
 
 ### Local real-time Chinese-English voice input
 
 Press a configurable shortcut once to start continuous recognition and again to stop. Text appears while you speak, with support for Chinese, English, and mixed speech plus automatic on-device punctuation. The shortcut, microphone, and activation sensitivity are configurable.
 
-![Token Bubble local voice input states](docs/images/token-bubble-voice-states.png)
+![Token Bubble local voice input states](docs/images/token-bubble-voice-states.png?v=0.2.0)
 
 ## Features
 

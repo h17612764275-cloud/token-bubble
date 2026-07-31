@@ -14,19 +14,21 @@ Token Bubble 基于 **Quota Float** 开发，并集成 **CodexScope** 的本地�
 
 ## 界面预览
 
+以下截图均由 `v0.2.0` 当前界面直接生成。
+
 ### 两款面板皮肤
 
 Token Bubble 提供肥皂泡皮肤（Bubble）和玻璃瓶皮肤（Glass）。面板与浮窗会同步使用所选皮肤的材质和视觉样式。
 
 | 肥皂泡皮肤（Bubble） | 玻璃瓶皮肤（Glass） |
 | --- | --- |
-| ![Token Bubble 肥皂泡皮肤面板和浮窗](docs/images/token-bubble-skin-bubble-overview.png) | ![Token Bubble 玻璃瓶皮肤面板和浮窗](docs/images/token-bubble-skin-glass-overview.png) |
+| ![Token Bubble 肥皂泡皮肤面板和浮窗](docs/images/token-bubble-skin-bubble-overview.png?v=0.2.0) | ![Token Bubble 玻璃瓶皮肤面板和浮窗](docs/images/token-bubble-skin-glass-overview.png?v=0.2.0) |
 
 ### 两款皮肤均可自由取色
 
 Bubble 和 Glass 两款面板都支持取色换色。打开取色器后，可以使用色板、色相条或 RGB 数值设置喜欢的界面颜色。
 
-![Token Bubble 面板取色器](docs/images/token-bubble-color-picker.png)
+![Token Bubble 面板取色器](docs/images/token-bubble-color-picker.png?v=0.2.0)
 
 ### 今日、近7天和近30天
 
@@ -34,7 +36,7 @@ Bubble 和 Glass 两款面板都支持取色换色。打开取色器后，可以
 
 | 今日 | 近7天 | 近30天 |
 | --- | --- | --- |
-| ![Token Bubble 今日 Token 用量](docs/images/token-bubble-skin-bubble-today.png) | ![Token Bubble 近7天 Token 用量](docs/images/token-bubble-skin-bubble-7d.png) | ![Token Bubble 近30天 Token 用量](docs/images/token-bubble-skin-bubble-30d.png) |
+| ![Token Bubble 今日 Token 用量](docs/images/token-bubble-skin-bubble-today.png?v=0.2.0) | ![Token Bubble 近7天 Token 用量](docs/images/token-bubble-skin-bubble-7d.png?v=0.2.0) | ![Token Bubble 近30天 Token 用量](docs/images/token-bubble-skin-bubble-30d.png?v=0.2.0) |
 
 ### 浮窗样式
 
@@ -42,13 +44,13 @@ Bubble 和 Glass 两款面板都支持取色换色。打开取色器后，可以
 
 | Bubble 浮窗 | Glass 浮窗 |
 | --- | --- |
-| ![Token Bubble Bubble 浮窗](docs/images/token-bubble-orb-bubble.png) | ![Token Bubble Glass 浮窗](docs/images/token-bubble-orb-glass.png) |
+| ![Token Bubble Bubble 浮窗](docs/images/token-bubble-orb-bubble.png?v=0.2.0) | ![Token Bubble Glass 浮窗](docs/images/token-bubble-orb-glass.png?v=0.2.0) |
 
 ### 本地实时中英文语音输入
 
 按一次自定义快捷键开启持续识别，再按一次关闭。语音会边说边显示文字，支持中文、英文及中英混说，并通过本地模型自动补充标点。快捷键、麦克风设备和识别灵敏度均可设置。
 
-![Token Bubble 本地语音输入状态](docs/images/token-bubble-voice-states.png)
+![Token Bubble 本地语音输入状态](docs/images/token-bubble-voice-states.png?v=0.2.0)
 
 ## 主要功能
 
