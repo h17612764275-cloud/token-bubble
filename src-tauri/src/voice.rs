@@ -97,7 +97,7 @@ fn recognizer(model_dir: &PathBuf) -> Result<OnlineRecognizer, String> {
     config.model_config.paraformer.encoder = Some(model_dir.join(files[0]).to_string_lossy().into_owned());
     config.model_config.paraformer.decoder = Some(model_dir.join(files[1]).to_string_lossy().into_owned());
     config.model_config.tokens = Some(model_dir.join(files[2]).to_string_lossy().into_owned());
-    config.model_config.num_threads = 1;
+    config.model_config.num_threads = 2;
     config.model_config.provider = Some("cpu".into());
     config.enable_endpoint = true;
     config.rule1_min_trailing_silence = 2.4;
