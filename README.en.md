@@ -9,12 +9,26 @@ Token Bubble is derived from **Quota Float** and integrates **CodexScope** for l
 ## Download
 
 - [Download the latest installer](https://github.com/h17612764275-cloud/token-bubble/releases/latest)
-- Current version: `v0.2.0`
+- Current published version: `v0.2.1`
 - Windows users should download the `.exe` installer from the Release.
+
+## Current `main` updates (2026-08-11)
+
+> These changes are available in the `main` source tree. The latest packaged GitHub Release is still `v0.2.1` and has not been rebuilt with them yet.
+
+- **Windows local screenshots and pinned captures:** Configure capture from the panel's camera button, then start with a global shortcut (`Ctrl+P` by default). Select, move, and resize a region, then annotate it with rectangles, ellipses, arrows, freehand strokes, mosaic, or text. Capture, clipboard copy, and pinned images are currently Windows-only.
+- **Save, clipboard, and pin:** Confirming saves a PNG and copies it to the clipboard. A selection can also be saved elsewhere or opened as a draggable, resizable, always-on-top image.
+- **Screenshot preferences:** Change the global shortcut, choose the default output folder, and open that folder directly from the panel.
+- **Automatic quota recovery:** The last valid quota stays visible through transient failures. Token Bubble retries after 30 seconds, supports immediate retry from an unavailable widget, and shares successful recovery between the tray panel and widget.
+- **Response ordering guards:** An older successful quota response cannot overwrite newer quota or a newer signed-out state, and it cannot corrupt the daily-usage baseline.
 
 ## Interface preview
 
-All screenshots below are generated directly from the current `v0.2.0` interface.
+The latest main-panel screenshot is generated from the current `main` interface with built-in demo data. It contains no real account or personal usage data.
+
+### Current main panel
+
+![Current Token Bubble main panel with screenshot settings entry](docs/images/token-bubble-panel.png?v=2026-08-11)
 
 ### Two panel skins
 
@@ -65,6 +79,8 @@ Press a configurable shortcut once to start continuous recognition and again to 
 - Provides tray actions for refresh and panel/widget visibility.
 - Provides fully local real-time Chinese-English voice input, automatic punctuation, and voice activity detection.
 - Tracks today's dictated characters and shows voice usage in the flippable 90-day heatmap.
+- Provides local region capture, annotation, saving, clipboard copy, and always-on-top pinned images on Windows.
+- Recovers quota automatically after transient network failures and synchronizes successful results across windows.
 
 ## Usage
 
@@ -74,16 +90,18 @@ Press a configurable shortcut once to start continuous recognition and again to 
 4. Use the controls to switch Bubble/Glass skins, open the color picker, resize the widget, or lock it in place.
 5. Select the renewal date at the top of the panel to set your membership renewal.
 6. Configure the voice shortcut, input device, and sensitivity; press the shortcut once to start and again to stop.
+7. On Windows, open screenshot settings from the camera button, configure the shortcut and folder, then select a region to save, copy, or pin.
 
 ## Data and privacy
 
-Token Bubble reads the existing local Codex Desktop login state and queries quota in read-only mode. Token history, voice-character totals, interface preferences, and the membership renewal date stay on the device. Speech recognition and punctuation run on-device.
+Token Bubble reads the existing local Codex Desktop login state and queries quota in read-only mode. Token history, voice-character totals, interface and screenshot preferences, and the membership renewal date stay on the device. Speech recognition, punctuation, and screenshot processing run on-device.
 
 - It does not upload prompts, chats, or local usage history.
 - It includes no telemetry, analytics, or crash reporting.
 - It does not redeem reset credits or change account settings.
 - Local token totals support history and verification views; they do not replace service-provided quota values.
 - Microphone audio is neither uploaded nor saved; only final character counts are stored locally for usage statistics.
+- Screen pixels are read only when the user starts a capture. Screenshots are not uploaded; they are saved locally and copied to the system clipboard.
 
 See [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md) for the complete boundary.
 

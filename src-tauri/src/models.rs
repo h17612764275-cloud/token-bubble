@@ -139,6 +139,10 @@ pub struct WidgetPreferences {
     pub voice_input_device: Option<String>,
     #[serde(default = "default_voice_sensitivity")]
     pub voice_sensitivity: f32,
+    #[serde(default = "default_screenshot_shortcut")]
+    pub screenshot_shortcut: String,
+    #[serde(default)]
+    pub screenshot_folder: String,
 }
 
 fn default_always_on_top() -> bool {
@@ -151,7 +155,7 @@ fn default_accent_color() -> String {
     "#b97892".into()
 }
 fn default_bubble_panel_accent_color() -> String {
-    "#6f7cff".into()
+    "#faa4ce".into()
 }
 fn default_widget_style() -> String {
     "bubble".into()
@@ -164,6 +168,9 @@ fn default_voice_shortcut() -> String {
 }
 fn default_voice_sensitivity() -> f32 {
     65.0
+}
+fn default_screenshot_shortcut() -> String {
+    "Ctrl+P".into()
 }
 impl Default for WidgetPreferences {
     fn default() -> Self {
@@ -183,6 +190,8 @@ impl Default for WidgetPreferences {
             voice_shortcut: default_voice_shortcut(),
             voice_input_device: None,
             voice_sensitivity: default_voice_sensitivity(),
+            screenshot_shortcut: default_screenshot_shortcut(),
+            screenshot_folder: String::new(),
         }
     }
 }
@@ -226,6 +235,10 @@ impl WidgetPreferences {
         } else {
             default_voice_sensitivity()
         };
+        if self.screenshot_shortcut.trim().is_empty() || self.screenshot_shortcut.len() > 64 {
+            self.screenshot_shortcut = default_screenshot_shortcut();
+        }
+        self.screenshot_folder = self.screenshot_folder.trim().to_string();
         self
     }
 }
@@ -254,11 +267,13 @@ mod preference_tests {
         .normalized();
 
         assert_eq!(value.accent_color, "#c07090");
-        assert_eq!(value.bubble_panel_accent_color, "#6f7cff");
+        assert_eq!(value.bubble_panel_accent_color, "#faa4ce");
         assert!(!value.voice_enabled);
         assert_eq!(value.voice_shortcut, "Ctrl+Space");
         assert_eq!(value.voice_input_device, None);
         assert_eq!(value.voice_sensitivity, 65.0);
+        assert_eq!(value.screenshot_shortcut, "Ctrl+P");
+        assert_eq!(value.screenshot_folder, "");
     }
 
     #[test]
@@ -269,6 +284,6 @@ mod preference_tests {
         let value = value.normalized();
 
         assert_eq!(value.accent_color, "#123456");
-        assert_eq!(value.bubble_panel_accent_color, "#6f7cff");
+        assert_eq!(value.bubble_panel_accent_color, "#faa4ce");
     }
 }

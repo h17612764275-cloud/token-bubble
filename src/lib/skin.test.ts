@@ -18,7 +18,7 @@ const preferences: WidgetPreferences = {
   positionLocked: false,
   widgetSize: 68,
   accentColor: "#b97892",
-  bubblePanelAccentColor: "#6f7cff",
+  bubblePanelAccentColor: "#faa4ce",
   widgetStyle: "bottle",
   alwaysOnTop: true,
   stayExpanded: false,
@@ -29,13 +29,15 @@ const preferences: WidgetPreferences = {
   voiceShortcut: "Ctrl+Space",
   voiceInputDevice: null,
   voiceSensitivity: 65,
+  screenshotShortcut: "Ctrl+P",
+  screenshotFolder: "",
 };
 
 describe("bound panel and widget skins", () => {
   it("round-trips RGB values without a native color picker", () => {
-    expect(hexToRgb("#fd81ca")).toEqual([253, 129, 202]);
-    expect(rgbToHex(253, 129, 202)).toBe("#fd81ca");
-    expect(hsvToRgb(...rgbToHsv(253, 129, 202))).toEqual([253, 129, 202]);
+    expect(hexToRgb("#faa4ce")).toEqual([250, 164, 206]);
+    expect(rgbToHex(250, 164, 206)).toBe("#faa4ce");
+    expect(hsvToRgb(...rgbToHsv(250, 164, 206))).toEqual([250, 164, 206]);
   });
 
   it("keeps flat-panel color linked to the bottle widget", () => {

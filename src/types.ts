@@ -102,4 +102,6 @@ export interface WidgetPreferences {
   voiceShortcut: string;
   voiceInputDevice: string | null;
   voiceSensitivity: number;
+  screenshotShortcut: string;
+  screenshotFolder: string;
 }

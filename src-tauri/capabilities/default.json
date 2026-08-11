@@ -12,6 +12,7 @@
     "core:window:allow-set-always-on-top",
     "updater:default",
     "process:allow-restart",
+    "dialog:allow-open",
     "global-shortcut:allow-is-registered",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",

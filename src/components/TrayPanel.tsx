@@ -1,5 +1,6 @@
 import {
   ArrowClockwise,
+  Camera,
   CalendarBlank,
   CaretLeft,
   CaretRight,
@@ -27,6 +28,7 @@ import { nextUsageRange, selectUsageRange, type UsageRange } from "../lib/usageR
 import { getVoiceCalendar } from "../lib/voiceHistory";
 import { localDateKey, monthGrid } from "../lib/calendar";
 import type { ProviderSnapshot, TokenBreakdown, VoiceEvent, WidgetPreferences, WidgetStyle } from "../types";
+import { ScreenshotSettingsDialog } from "./ScreenshotSettingsDialog";
 
 interface Props {
   snapshot: ProviderSnapshot;
@@ -40,6 +42,7 @@ interface Props {
   voiceEvent: VoiceEvent;
   voiceRevision: number;
   onVoicePreferencesChange: (enabled: boolean, shortcut: string, inputDevice: string | null, sensitivity: number) => void;
+  onScreenshotPreferencesChange: (shortcut: string, folder: string) => void;
 }
 
 const WEEKDAYS_ZH = ["一", "二", "三", "四", "五", "六", "日"];
@@ -47,7 +50,7 @@ const WEEKDAYS_EN = ["M", "T", "W", "T", "F", "S", "S"];
 const MEMBERSHIP_EXPIRY_KEY = "quota-float:membership-expiry";
 const COST_CURRENCY_KEY = "quota-float:cost-currency";
 const WEEKLY_TOKEN_TARGET = 20_000_000_000;
-const PANEL_COLOR_PRESETS = ["#fd81ca", "#d486e8", "#9a8cf2", "#72b7ea", "#6fcfc9", "#e6a56f", "#c77b91", "#75809a"];
+const PANEL_COLOR_PRESETS = ["#faa4ce", "#d486e8", "#9a8cf2", "#72b7ea", "#6fcfc9", "#e6a56f", "#c77b91", "#75809a"];
 const RESIZE_HANDLES: Array<{ direction: PanelResizeDirection; className: string }> = [
   { direction: "North", className: "north" },
   { direction: "East", className: "east" },
@@ -98,6 +101,7 @@ export const TrayPanel = memo(function TrayPanel({
   voiceEvent,
   voiceRevision,
   onVoicePreferencesChange,
+  onScreenshotPreferencesChange,
 }: Props) {
   const language = normalizeLanguage(preferences.language);
   const zh = language === "zh-CN";
@@ -112,6 +116,7 @@ export const TrayPanel = memo(function TrayPanel({
   const [historyFace, setHistoryFace] = useState<"tokens" | "voice">("tokens");
   const [historyFlip, setHistoryFlip] = useState<"to-voice" | "to-tokens" | null>(null);
   const [shortcutSettingsOpen, setShortcutSettingsOpen] = useState(false);
+  const [screenshotSettingsOpen, setScreenshotSettingsOpen] = useState(false);
   const [capturingShortcut, setCapturingShortcut] = useState(false);
   const [voiceInputDevices, setVoiceInputDevices] = useState<string[]>([]);
   const [voiceDevicesLoading, setVoiceDevicesLoading] = useState(false);
@@ -120,7 +125,7 @@ export const TrayPanel = memo(function TrayPanel({
   const [draftMembershipExpiry, setDraftMembershipExpiry] = useState("");
   const [panelColorDialogOpen, setPanelColorDialogOpen] = useState(false);
   const [draftPanelColor, setDraftPanelColor] = useState(panelAccent);
-  const [panelColorHue, setPanelColorHue] = useState(() => rgbToHsv(...(hexToRgb(panelAccent) ?? [253, 129, 202]))[0]);
+  const [panelColorHue, setPanelColorHue] = useState(() => rgbToHsv(...(hexToRgb(panelAccent) ?? [250, 164, 206]))[0]);
   const [calendarCursor, setCalendarCursor] = useState(() => {
     const today = new Date();
     return { year: today.getFullYear(), month: today.getMonth() };
@@ -302,12 +307,12 @@ export const TrayPanel = memo(function TrayPanel({
 
   const openPanelColorPicker = () => {
     setDraftPanelColor(panelAccent);
-    setPanelColorHue(rgbToHsv(...(hexToRgb(panelAccent) ?? [253, 129, 202]))[0]);
+    setPanelColorHue(rgbToHsv(...(hexToRgb(panelAccent) ?? [250, 164, 206]))[0]);
     setPanelColorDialogOpen(true);
   };
 
   const validDraftPanelColor = /^#[0-9a-f]{6}$/i.test(draftPanelColor);
-  const panelColorRgb = hexToRgb(validDraftPanelColor ? draftPanelColor : panelAccent) ?? [253, 129, 202];
+  const panelColorRgb = hexToRgb(validDraftPanelColor ? draftPanelColor : panelAccent) ?? [250, 164, 206];
   const [, panelColorSaturation, panelColorValue] = rgbToHsv(...panelColorRgb);
   const setValidDraftPanelColor = (color: string) => {
     const rgb = hexToRgb(color);
@@ -432,6 +437,16 @@ export const TrayPanel = memo(function TrayPanel({
           </div>
         </div>
         <button
+          className="tray-icon-button screenshot-settings-button"
+          type="button"
+          onClick={() => setScreenshotSettingsOpen(true)}
+          aria-expanded={screenshotSettingsOpen}
+          aria-label={zh ? "截图设置" : "Screenshot settings"}
+          title={zh ? "截图设置" : "Screenshot settings"}
+        >
+          <Camera weight="duotone" />
+        </button>
+        <button
           className="tray-icon-button"
           type="button"
           onClick={onRefresh}
@@ -441,6 +456,15 @@ export const TrayPanel = memo(function TrayPanel({
           <ArrowClockwise />
         </button>
       </header>
+
+      {screenshotSettingsOpen ? (
+        <ScreenshotSettingsDialog
+          preferences={preferences}
+          zh={zh}
+          onClose={() => setScreenshotSettingsOpen(false)}
+          onSave={onScreenshotPreferencesChange}
+        />
+      ) : null}
 
       {renewalCalendarOpen ? (
         <div className="voice-shortcut-backdrop renewal-calendar-backdrop" onMouseDown={() => setRenewalCalendarOpen(false)}>

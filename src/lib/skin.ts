@@ -1,7 +1,7 @@
 import type { WidgetPreferences, WidgetStyle } from "../types";
 
 export const FIXED_BUBBLE_WIDGET_ACCENT = "#8b86ff";
-export const FIXED_BUBBLE_PANEL_ACCENT = "#fd81ca";
+export const FIXED_BUBBLE_PANEL_ACCENT = "#faa4ce";
 
 export function panelAccentColor(preferences: WidgetPreferences): string {
   return preferences.widgetStyle === "bubble"

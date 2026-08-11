@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "screenshot",
+  "description": "Minimum capabilities for the screenshot selection window",
+  "windows": ["screenshot"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-save"
+  ]
+}

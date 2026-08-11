@@ -1,20 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { QuotaCard, QuotaOrb } from "./components/QuotaCard";
+import { PinnedScreenshot } from "./components/PinnedScreenshot";
+import { ScreenshotOverlay } from "./components/ScreenshotOverlay";
 import { TrayPanel } from "./components/TrayPanel";
-import { fetchSnapshots, getPreferences, listenDesktopEvents, registerVoiceShortcut, resizeFloatingWidget, setWidgetExpanded, setWidgetPositionLocked, startDragging, startVoice, stopVoice, toggleFloatingWidget, togglePanelFromWidget, updatePreferences } from "./lib/bridge";
+import { broadcastSnapshots, fetchSnapshots, getPreferences, listenDesktopEvents, registerVoiceShortcut, resizeFloatingWidget, setWidgetExpanded, setWidgetPositionLocked, startDragging, startVoice, stopVoice, toggleFloatingWidget, togglePanelFromWidget, updatePreferences } from "./lib/bridge";
 import { needsFastRefresh } from "./lib/format";
 import { checkForAppUpdate } from "./lib/appUpdate";
 import { copy, normalizeLanguage } from "./lib/i18n";
-import { mergeSnapshots } from "./lib/snapshots";
+import { filterSnapshotUpdates, mergeSnapshotUpdates, mergeSnapshots } from "./lib/snapshots";
 import { recordDailyUsage } from "./lib/dailyUsage";
 import { withPanelAccentColor, withWidgetStyle } from "./lib/skin";
 import { recordVoiceText } from "./lib/voiceHistory";
 import type { ProviderSnapshot, VoiceEvent, WidgetPreferences } from "./types";
 
-const DEFAULT_PREFS: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#6f7cff", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: null, autoRotateSeconds: 12, language: "zh-CN", voiceEnabled: false, voiceShortcut: "Ctrl+Space", voiceInputDevice: null, voiceSensitivity: 65 };
+const DEFAULT_PREFS: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#faa4ce", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: null, autoRotateSeconds: 12, language: "zh-CN", voiceEnabled: false, voiceShortcut: "Ctrl+Space", voiceInputDevice: null, voiceSensitivity: 65, screenshotShortcut: "Ctrl+P", screenshotFolder: "" };
 
 export default function App() {
-  const isTrayPanel = new URLSearchParams(window.location.search).get("view") === "tray";
+  const bootstrap = window as typeof window & { __TOKEN_BUBBLE_VIEW__?: string };
+  const view = bootstrap.__TOKEN_BUBBLE_VIEW__ ?? new URLSearchParams(window.location.search).get("view");
+  const nativeLabel = "__TAURI_INTERNALS__" in window ? getCurrentWindow().label : "";
+  if (nativeLabel === "screenshot" || view === "screenshot") return <ScreenshotOverlay />;
+  if (nativeLabel.startsWith("pin-") || view === "pin") return <PinnedScreenshot />;
+  return <QuotaApp isTrayPanel={nativeLabel === "tray-panel" || view === "tray"} />;
+}
+
+function QuotaApp({ isTrayPanel }: { isTrayPanel: boolean }) {
   const [snapshots, setSnapshots] = useState<ProviderSnapshot[]>([]);
   const [preferences, setPreferences] = useState(DEFAULT_PREFS);
   const [voiceEvent, setVoiceEvent] = useState<VoiceEvent>({ status: "disabled", level: 0 });
@@ -26,6 +37,8 @@ export default function App() {
   const [operationError, setOperationError] = useState<string | null>(null);
   const [showUpdateFallback, setShowUpdateFallback] = useState(false);
   const failures = useRef(0);
+  const snapshotsRef = useRef<ProviderSnapshot[]>([]);
+  const successfulSnapshotVersions = useRef(new Map<ProviderSnapshot["provider"], number>());
   const previousPrimary = useRef(new Map<string, number>());
   const consumptionTimers = useRef(new Map<string, number>());
   const collapseTimer = useRef<number | null>(null);
@@ -50,39 +63,75 @@ export default function App() {
     }, manual);
   }, [language, t]);
 
-  const refresh = useCallback(async (force = false) => {
-    try {
-      const values = await fetchSnapshots(force);
-      const hasFailure = values.some((item) => item.status !== "ok");
-      if (hasFailure) failures.current += 1;
-      else failures.current = 0;
-      for (const item of values) {
-        recordDailyUsage(item);
-        const nextPrimary = item.shortWindow?.remainingPercent;
-        const previous = previousPrimary.current.get(item.provider);
-        if (nextPrimary !== undefined && previous !== undefined && nextPrimary < previous) {
-          setConsumingProviders((current) => new Set(current).add(item.provider));
-          const oldTimer = consumptionTimers.current.get(item.provider);
-          if (oldTimer !== undefined) window.clearTimeout(oldTimer);
-          const timer = window.setTimeout(() => {
-            setConsumingProviders((current) => { const next = new Set(current); next.delete(item.provider); return next; });
-            consumptionTimers.current.delete(item.provider);
-          }, 5 * 60_000);
-          consumptionTimers.current.set(item.provider, timer);
-        }
-        if (nextPrimary !== undefined) previousPrimary.current.set(item.provider, nextPrimary);
+  const applySnapshots = useCallback((values: ProviderSnapshot[], mode: "full" | "partial" = "full"): ProviderSnapshot[] => {
+    const accepted = filterSnapshotUpdates(snapshotsRef.current, values);
+    if (accepted.length === 0) return [];
+    const effectiveMode = mode === "partial" || accepted.length < values.length ? "partial" : "full";
+    const next = effectiveMode === "partial"
+      ? mergeSnapshotUpdates(snapshotsRef.current, accepted)
+      : mergeSnapshots(snapshotsRef.current, accepted);
+    snapshotsRef.current = next;
+
+    for (const item of accepted) {
+      if (item.status === "ok") {
+        successfulSnapshotVersions.current.set(item.provider, (successfulSnapshotVersions.current.get(item.provider) ?? 0) + 1);
       }
-      setSnapshots((current) => mergeSnapshots(current, values));
-    } catch {
-      failures.current += 1;
-      setSnapshots((current) => current.length > 0
-        ? current.map((item) => ({ ...item, status: "stale", message: "Refresh failed. Please try again later." }))
-        : [{ provider: "codex", displayName: "CODEX", plan: null, shortWindow: null, weeklyWindow: null, resetCredits: null, resetCreditExpiresAt: [], updatedAt: new Date().toISOString(), status: "unavailable", message: "Quota is temporarily unavailable. It will retry automatically." }]);
+      recordDailyUsage(item);
+      const nextPrimary = item.shortWindow?.remainingPercent;
+      const previous = previousPrimary.current.get(item.provider);
+      if (nextPrimary !== undefined && previous !== undefined && nextPrimary < previous) {
+        setConsumingProviders((current) => new Set(current).add(item.provider));
+        const oldTimer = consumptionTimers.current.get(item.provider);
+        if (oldTimer !== undefined) window.clearTimeout(oldTimer);
+        const timer = window.setTimeout(() => {
+          setConsumingProviders((current) => { const next = new Set(current); next.delete(item.provider); return next; });
+          consumptionTimers.current.delete(item.provider);
+        }, 5 * 60_000);
+        consumptionTimers.current.set(item.provider, timer);
+      }
+      if (nextPrimary !== undefined) previousPrimary.current.set(item.provider, nextPrimary);
     }
+    const hasFailure = next.some((item) => item.status !== "ok");
+    if (effectiveMode === "full") failures.current = hasFailure ? failures.current + 1 : 0;
+    else failures.current = hasFailure ? Math.max(1, failures.current) : 0;
+    setSnapshots(next);
+    return accepted;
   }, []);
 
+  const refresh = useCallback(async (force = false) => {
+    const versionsAtStart = new Map(successfulSnapshotVersions.current);
+    try {
+      const values = await fetchSnapshots(force);
+      const accepted = values.filter((item) => item.status === "ok"
+        || (successfulSnapshotVersions.current.get(item.provider) ?? 0) === (versionsAtStart.get(item.provider) ?? 0));
+      const applied = accepted.length > 0
+        ? applySnapshots(accepted, accepted.length === values.length ? "full" : "partial")
+        : [];
+      const successful = applied.filter((item) => item.status === "ok");
+      if (successful.length > 0) void broadcastSnapshots(successful).catch(() => undefined);
+    } catch {
+      setSnapshots((current) => {
+        if (current.length === 0) {
+          failures.current += 1;
+          const next = [{ provider: "codex", displayName: "CODEX", plan: null, shortWindow: null, weeklyWindow: null, resetCredits: null, resetCreditExpiresAt: [], updatedAt: new Date().toISOString(), status: "unavailable", message: "Quota is temporarily unavailable. It will retry automatically." } satisfies ProviderSnapshot];
+          snapshotsRef.current = next;
+          return next;
+        }
+        let degraded = false;
+        const next = current.map((item) => {
+          const changedSinceStart = (successfulSnapshotVersions.current.get(item.provider) ?? 0) !== (versionsAtStart.get(item.provider) ?? 0);
+          if (changedSinceStart) return item;
+          degraded = true;
+          return { ...item, status: "stale" as const, message: "Refresh failed. Please try again later." };
+        });
+        if (degraded) failures.current += 1;
+        snapshotsRef.current = next;
+        return next;
+      });
+    }
+  }, [applySnapshots]);
+
   useEffect(() => {
-    void refresh(true);
     void getPreferences().then((value) => setPreferences({ ...DEFAULT_PREFS, ...value, language: normalizeLanguage(value.language) })).catch(() => setOperationError("Unable to read settings. Defaults are in use."));
     return () => {
       for (const timer of consumptionTimers.current.values()) window.clearTimeout(timer);
@@ -98,6 +147,7 @@ export default function App() {
       onPreferences: (value) => setPreferences({ ...DEFAULT_PREFS, ...value, language: normalizeLanguage(value.language) }),
       onRefresh: () => void refresh(true),
       onUpdate: () => checkUpdate(true),
+      onSnapshots: (values) => applySnapshots(values, "partial"),
       onVoice: (value) => {
         setVoiceEvent(value);
         if (value.finalText) {
@@ -107,10 +157,19 @@ export default function App() {
         if (value.message) setOperationError(value.message);
       },
     }).then((value) => {
-      if (cancelled) value(); else cleanup = value;
-    }).catch(() => setOperationError("Desktop event listener failed to start."));
+      if (cancelled) value();
+      else {
+        cleanup = value;
+        void refresh(true);
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setOperationError("Desktop event listener failed to start.");
+        void refresh(true);
+      }
+    });
     return () => { cancelled = true; cleanup(); };
-  }, [checkUpdate, isTrayPanel, refresh]);
+  }, [applySnapshots, checkUpdate, isTrayPanel, refresh]);
 
   useEffect(() => {
     if (isTrayPanel) return;
@@ -236,9 +295,10 @@ export default function App() {
         voiceEvent={voiceEvent}
         voiceRevision={voiceRevision}
         onVoicePreferencesChange={(voiceEnabled, voiceShortcut, voiceInputDevice, voiceSensitivity) => savePreferences({ ...preferences, voiceEnabled, voiceShortcut, voiceInputDevice, voiceSensitivity })}
+        onScreenshotPreferencesChange={(screenshotShortcut, screenshotFolder) => savePreferences({ ...preferences, screenshotShortcut, screenshotFolder })}
       />
     );
   }
 
-  return <QuotaOrb snapshot={current} language={language} positionLocked={preferences.positionLocked} widgetSize={preferences.widgetSize} accentColor={preferences.accentColor} widgetStyle={preferences.widgetStyle} voiceEvent={voiceEvent} onDrag={() => startDragging()} onHover={() => undefined} onOpenPanel={() => togglePanelFromWidget()} />;
+  return <QuotaOrb snapshot={current} language={language} positionLocked={preferences.positionLocked} widgetSize={preferences.widgetSize} accentColor={preferences.accentColor} widgetStyle={preferences.widgetStyle} voiceEvent={voiceEvent} onDrag={() => startDragging()} onHover={(value) => { setHovered(value); if (value && (current.status === "unavailable" || current.status === "stale")) void refresh(true); }} onOpenPanel={() => togglePanelFromWidget()} />;
 }

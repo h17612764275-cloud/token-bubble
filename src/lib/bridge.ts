@@ -1,6 +1,6 @@
 import type { ProviderSnapshot, VoiceEvent, WidgetPreferences } from "../types";
 
-const defaultPreferences: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#6f7cff", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: null, autoRotateSeconds: 12, language: "zh-CN", voiceEnabled: false, voiceShortcut: "Ctrl+Space", voiceInputDevice: null, voiceSensitivity: 65 };
+const defaultPreferences: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#faa4ce", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: null, autoRotateSeconds: 12, language: "zh-CN", voiceEnabled: false, voiceShortcut: "Ctrl+Space", voiceInputDevice: null, voiceSensitivity: 65, screenshotShortcut: "Ctrl+P", screenshotFolder: "" };
 
 const mockSnapshot: ProviderSnapshot = {
   provider: "codex",
@@ -90,6 +90,18 @@ export async function fetchSnapshots(force = false): Promise<ProviderSnapshot[]>
   return invoke<ProviderSnapshot[]>(force ? "refresh_snapshots" : "get_snapshots");
 }
 
+export async function broadcastSnapshots(values: ProviderSnapshot[]): Promise<void> {
+  if (!isTauri()) return;
+  const [{ emitTo }, { getCurrentWindow }] = await Promise.all([
+    import("@tauri-apps/api/event"),
+    import("@tauri-apps/api/window"),
+  ]);
+  const currentLabel = getCurrentWindow().label;
+  if (currentLabel !== "widget" && currentLabel !== "tray-panel") return;
+  const targetLabel = currentLabel === "widget" ? "tray-panel" : "widget";
+  await emitTo(targetLabel, "snapshots-updated", values);
+}
+
 export async function getPreferences(): Promise<WidgetPreferences> {
   if (!isTauri()) return defaultPreferences;
   const { invoke } = await import("@tauri-apps/api/core");
@@ -162,11 +174,124 @@ export async function getVoiceInputDevices(): Promise<string[]> {
   return invoke<string[]>("get_voice_input_devices");
 }
 
-export async function registerVoiceShortcut(shortcut: string, handler: () => void): Promise<() => Promise<void>> {
+export async function registerGlobalShortcut(shortcut: string, handler: () => void): Promise<() => Promise<void>> {
   if (!isTauri()) return async () => undefined;
   const { register, unregister } = await import("@tauri-apps/plugin-global-shortcut");
   await register(shortcut, (event) => { if (event.state === "Pressed") handler(); });
   return () => unregister(shortcut);
+}
+
+export const registerVoiceShortcut = registerGlobalShortcut;
+
+export async function isGlobalShortcutRegistered(shortcut: string): Promise<boolean> {
+  if (!isTauri()) return false;
+  const { isRegistered } = await import("@tauri-apps/plugin-global-shortcut");
+  return isRegistered(shortcut);
+}
+
+export interface ScreenshotCapturePayload {
+  dataUrl: string;
+  width: number;
+  height: number;
+}
+
+export async function beginScreenshot(): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("begin_screenshot");
+}
+
+export async function getScreenshotCapture(): Promise<ScreenshotCapturePayload> {
+  if (!isTauri()) {
+    const width = 1440;
+    const height = 900;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d")!;
+    const background = context.createLinearGradient(0, 0, width, height);
+    background.addColorStop(0, "#071323");
+    background.addColorStop(.55, "#142942");
+    background.addColorStop(1, "#080d18");
+    context.fillStyle = background;
+    context.fillRect(0, 0, width, height);
+    const glow = context.createRadialGradient(620, 390, 20, 620, 390, 430);
+    glow.addColorStop(0, "rgba(71,146,255,.92)");
+    glow.addColorStop(.5, "rgba(52,88,205,.48)");
+    glow.addColorStop(1, "rgba(26,34,80,0)");
+    context.fillStyle = glow;
+    context.fillRect(120, 40, 1000, 800);
+    return { dataUrl: canvas.toDataURL("image/png"), width, height };
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<ScreenshotCapturePayload>("get_screenshot_capture");
+}
+
+export async function activateScreenshot(): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("activate_screenshot");
+}
+
+export async function heartbeatScreenshot(): Promise<boolean> {
+  if (!isTauri()) return false;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<boolean>("screenshot_heartbeat");
+}
+
+export async function setScreenshotDialogMode(open: boolean): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("set_screenshot_dialog_mode", { open });
+}
+
+export async function cancelScreenshot(): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("cancel_screenshot");
+}
+
+export async function finishScreenshot(dataUrl: string, targetPath: string | null, pin = false): Promise<{ savedPath: string }> {
+  if (!isTauri()) return { savedPath: "" };
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<{ savedPath: string }>("finish_screenshot", { dataUrl, targetPath, pin });
+}
+
+export async function getDefaultScreenshotFolder(): Promise<string> {
+  if (!isTauri()) return "Token Bubble\\截图";
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("get_default_screenshot_folder");
+}
+
+export async function chooseScreenshotFolder(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const value = await open({ directory: true, multiple: false, title: "选择截图保存文件夹" });
+  return typeof value === "string" ? value : null;
+}
+
+export async function chooseScreenshotFile(defaultPath: string): Promise<string | null> {
+  if (!isTauri()) return null;
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  return save({ defaultPath, title: "保存截图", filters: [{ name: "PNG 图片", extensions: ["png"] }] });
+}
+
+export async function openScreenshotFolder(path: string): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_screenshot_folder", { path });
+}
+
+export async function getPinnedScreenshot(id: string): Promise<ScreenshotCapturePayload> {
+  if (!isTauri()) throw new Error("贴图仅在桌面应用中可用");
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<ScreenshotCapturePayload>("get_pinned_screenshot", { id });
+}
+
+export async function closePinnedScreenshot(id: string): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("close_pinned_screenshot", { id });
 }
 
 export async function quitApp(): Promise<void> {
@@ -226,6 +351,7 @@ export async function listenDesktopEvents(handlers: {
   onPreferences: (value: WidgetPreferences) => void;
   onRefresh: () => void;
   onUpdate: () => void;
+  onSnapshots?: (value: ProviderSnapshot[]) => void;
   onVoice?: (value: VoiceEvent) => void;
 }): Promise<() => void> {
   if (!isTauri()) return () => undefined;
@@ -233,6 +359,7 @@ export async function listenDesktopEvents(handlers: {
   const unlistenPreferences = await listen<WidgetPreferences>("preferences-changed", (event) => handlers.onPreferences(event.payload));
   const unlistenRefresh = await listen("refresh-requested", handlers.onRefresh);
   const unlistenUpdate = await listen("update-check-requested", handlers.onUpdate);
+  const unlistenSnapshots = handlers.onSnapshots ? await listen<ProviderSnapshot[]>("snapshots-updated", (event) => handlers.onSnapshots?.(event.payload)) : () => undefined;
   const unlistenVoice = handlers.onVoice ? await listen<VoiceEvent>("voice-event", (event) => handlers.onVoice?.(event.payload)) : () => undefined;
-  return () => { unlistenPreferences(); unlistenRefresh(); unlistenUpdate(); unlistenVoice(); };
+  return () => { unlistenPreferences(); unlistenRefresh(); unlistenUpdate(); unlistenSnapshots(); unlistenVoice(); };
 }

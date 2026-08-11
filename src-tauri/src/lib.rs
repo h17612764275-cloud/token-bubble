@@ -1,6 +1,7 @@
 mod codex;
 mod local_usage;
 mod models;
+mod screenshot;
 mod voice;
 
 use std::{
@@ -25,6 +26,7 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WindowEvent,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_window_state::Builder as WindowStateBuilder;
 use voice::VoiceManager;
 
@@ -1013,13 +1015,71 @@ fn set_preferences(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let preferences = preferences.normalized();
-    persist_preferences(&state.preferences_path, &preferences)?;
-    *state
+    let mut stored_preferences = state
         .preferences
         .lock()
-        .map_err(|_| "settings unavailable".to_string())? = preferences.clone();
+        .map_err(|_| "settings unavailable".to_string())?;
+    let previous = stored_preferences.clone();
+    let previous_shortcut = previous.screenshot_shortcut.clone();
+    let shortcut_changed = previous_shortcut != preferences.screenshot_shortcut;
+    let previous_shortcut_registered = shortcut_changed
+        && app
+            .global_shortcut()
+            .is_registered(previous_shortcut.as_str());
+    if shortcut_changed {
+        register_screenshot_shortcut(&app, &preferences.screenshot_shortcut)?;
+        if previous_shortcut_registered {
+            if let Err(error) = app.global_shortcut().unregister(previous_shortcut.as_str()) {
+                let rollback = app
+                    .global_shortcut()
+                    .unregister(preferences.screenshot_shortcut.as_str());
+                return Err(match rollback {
+                    Ok(()) => format!("无法停用旧截图快捷键：{error}"),
+                    Err(rollback_error) => format!(
+                        "无法停用旧截图快捷键：{error}；撤销新快捷键也失败：{rollback_error}"
+                    ),
+                });
+            }
+        }
+    }
+    if let Err(error) = persist_preferences(&state.preferences_path, &preferences) {
+        if shortcut_changed {
+            let unregister_error = app
+                .global_shortcut()
+                .unregister(preferences.screenshot_shortcut.as_str())
+                .err();
+            let restore_error = previous_shortcut_registered
+                .then(|| register_screenshot_shortcut(&app, &previous_shortcut).err())
+                .flatten();
+            return Err(match (unregister_error, restore_error) {
+                (None, None) => error,
+                (unregister_error, restore_error) => format!(
+                    "{error}；快捷键回滚不完整（撤销新快捷键：{}；恢复旧快捷键：{}）",
+                    unregister_error.map_or_else(|| "成功".to_string(), |value| value.to_string()),
+                    restore_error.map_or_else(
+                        || if previous_shortcut_registered { "成功" } else { "无需恢复" }.to_string(),
+                        |value| value,
+                    ),
+                ),
+            });
+        }
+        return Err(error);
+    }
+    *stored_preferences = preferences.clone();
+    drop(stored_preferences);
     let _ = app.emit("preferences-changed", preferences);
     Ok(())
+}
+
+fn register_screenshot_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String> {
+    app.global_shortcut()
+        .on_shortcut(shortcut, |app, _, event| {
+            if event.state == ShortcutState::Pressed {
+                let manager = app.state::<screenshot::ScreenshotManager>();
+                let _ = screenshot::begin_screenshot(app.clone(), manager);
+            }
+        })
+        .map_err(|error| format!("截图快捷键注册失败：{error}"))
 }
 
 fn apply_lock(app: &AppHandle, locked: bool) -> Result<(), String> {
@@ -1487,8 +1547,18 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .on_page_load(|window, payload| {
+            if window.label() == "screenshot" && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                let app = window.app_handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(80));
+                    let _ = app.emit_to("screenshot", "screenshot-capture-ready", ());
+                });
+            }
+        })
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("widget") {
                 let _ = window.show();
@@ -1505,6 +1575,12 @@ pub fn run() {
             let preferences_path = data_dir.join("preferences.json");
             let mut preferences = load_preferences(&preferences_path);
             preferences.voice_enabled = false;
+            if preferences.screenshot_folder.is_empty() {
+                preferences.screenshot_folder = screenshot::default_screenshot_folder()
+                    .to_string_lossy()
+                    .into_owned();
+                let _ = persist_preferences(&preferences_path, &preferences);
+            }
             let voice_model_dir = app.path().resource_dir()?.join("asr");
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(12))
@@ -1526,6 +1602,10 @@ pub fn run() {
                 panel_resize_generation: AtomicU64::new(0),
             });
             app.manage(VoiceManager::new(voice_model_dir));
+            app.manage(screenshot::ScreenshotManager::default());
+            if let Err(error) = register_screenshot_shortcut(app.handle(), &preferences.screenshot_shortcut) {
+                eprintln!("{error}");
+            }
             if setup_tray(app).is_err() {
                 eprintln!("tray setup failed; enabling taskbar fallback");
                 if let Some(window) = app.get_webview_window("widget") {
@@ -1565,13 +1645,43 @@ pub fn run() {
             start_voice,
             stop_voice,
             get_voice_input_devices,
+            screenshot::begin_screenshot,
+            screenshot::activate_screenshot,
+            screenshot::get_screenshot_capture,
+            screenshot::screenshot_heartbeat,
+            screenshot::set_screenshot_dialog_mode,
+            screenshot::cancel_screenshot,
+            screenshot::finish_screenshot,
+            screenshot::get_default_screenshot_folder,
+            screenshot::open_screenshot_folder,
+            screenshot::get_pinned_screenshot,
+            screenshot::close_pinned_screenshot,
             quit_app
         ])
         .on_window_event(|window, event| {
             match event {
-                WindowEvent::CloseRequested { api, .. } => {
+                WindowEvent::CloseRequested { api, .. }
+                    if window.label() == "widget" || window.label() == "tray-panel" => {
                     api.prevent_close();
                     let _ = window.hide();
+                }
+                WindowEvent::CloseRequested { api, .. } if window.label() == "screenshot" => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    let manager = window.state::<screenshot::ScreenshotManager>();
+                    screenshot::discard_capture(&manager);
+                    screenshot::restore_windows(window.app_handle(), &manager);
+                }
+                WindowEvent::CloseRequested { api, .. } if window.label() == "pin" => {
+                    api.prevent_close();
+                    let manager = window.state::<screenshot::ScreenshotManager>();
+                    screenshot::remove_pin(&manager, window.label());
+                    let _ = window.emit("pinned-screenshot-cleared", ());
+                    let _ = window.hide();
+                }
+                WindowEvent::CloseRequested { .. } if window.label().starts_with("pin-") => {
+                    let manager = window.state::<screenshot::ScreenshotManager>();
+                    screenshot::remove_pin(&manager, window.label());
                 }
                 WindowEvent::Focused(false) if window.label() == "tray-panel" => {
                     let resizing = window
