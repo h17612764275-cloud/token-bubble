@@ -358,6 +358,19 @@ fn find_window<'a>(
     None
 }
 
+fn find_additional_rate_limit<'a>(usage: &'a Value, limit_name: &str) -> Option<&'a Value> {
+    usage
+        .get("additional_rate_limits")
+        .or_else(|| usage.get("additionalRateLimits"))
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|item| {
+            pick_string(item, &["limit_name", "limitName", "name"])
+                .is_some_and(|name| name.eq_ignore_ascii_case(limit_name))
+        })
+        .and_then(|item| item.get("rate_limit").or_else(|| item.get("rateLimit")))
+}
+
 fn safe_http_failure(status: reqwest::StatusCode) -> (&'static str, &'static str) {
     match status.as_u16() {
         401 | 403 => ("signed_out", "Codex login expired. Please sign in again."),
@@ -367,6 +380,24 @@ fn safe_http_failure(status: reqwest::StatusCode) -> (&'static str, &'static str
         ),
         _ => ("unavailable", "Quota service is temporarily unavailable."),
     }
+}
+
+fn record_quota_failure(message: &str) {
+    let Some(directory) = dirs::config_dir().map(|path| path.join("app.quotafloat.desktop")) else {
+        return;
+    };
+    if fs::create_dir_all(&directory).is_err() {
+        return;
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(directory.join("quota-errors.log"))
+    else {
+        return;
+    };
+    let line = format!("{} {message}\n", chrono::Utc::now().to_rfc3339());
+    let _ = std::io::Write::write_all(&mut file, line.as_bytes());
 }
 
 async fn limited_json(mut response: reqwest::Response) -> Result<Value, ()> {
@@ -411,10 +442,15 @@ pub async fn fetch_snapshot(client: &reqwest::Client, force_profile_refresh: boo
     let usage_response = match usage_result {
         Ok(response) if response.status().is_success() => response,
         Ok(response) => {
+            record_quota_failure(&format!(
+                "quota usage request failed with HTTP {}",
+                response.status()
+            ));
             let (status, message) = safe_http_failure(response.status());
             return ProviderSnapshot::failure(status, message);
         }
-        Err(_) => {
+        Err(error) => {
+            record_quota_failure(&format!("quota usage request failed: {error}"));
             return ProviderSnapshot::failure(
                 "unavailable",
                 "Network unavailable. It will retry automatically.",
@@ -423,7 +459,10 @@ pub async fn fetch_snapshot(client: &reqwest::Client, force_profile_refresh: boo
     };
     let usage: Value = match limited_json(usage_response).await {
         Ok(value) => value,
-        Err(_) => {
+        Err(error) => {
+            record_quota_failure(&format!(
+                "quota usage response could not be parsed: {error:?}"
+            ));
             return ProviderSnapshot::failure("unavailable", "Quota response format has changed.")
         }
     };
@@ -462,7 +501,22 @@ pub async fn fetch_snapshot(client: &reqwest::Client, force_profile_refresh: boo
         ],
         604_800,
     ));
+    let spark_weekly_window = find_additional_rate_limit(&usage, "GPT-5.3-Codex-Spark")
+        .and_then(|rate_limit| {
+            parse_window(find_window(
+                rate_limit,
+                &[
+                    "primary_window",
+                    "primaryWindow",
+                    "weekly_window",
+                    "weeklyWindow",
+                    "primary",
+                ],
+                604_800,
+            ))
+        });
     if short_window.is_none() && weekly_window.is_none() {
+        record_quota_failure("quota usage response contained no recognized usage window");
         return ProviderSnapshot::failure(
             "unavailable",
             "Quota response does not contain a recognized usage window.",
@@ -527,6 +581,7 @@ pub async fn fetch_snapshot(client: &reqwest::Client, force_profile_refresh: boo
         plan: pick_string(&usage, &["plan_type", "planType"]).map(|value| value.to_uppercase()),
         short_window,
         weekly_window,
+        spark_weekly_window,
         reset_credits,
         reset_credit_expires_at,
         daily_token_usage,
@@ -658,6 +713,31 @@ mod tests {
         .unwrap();
         assert_eq!(weekly.remaining_percent, 98.0);
         assert_eq!(weekly.window_seconds, 604_800);
+    }
+
+    #[test]
+    fn parses_the_spark_additional_weekly_limit() {
+        let usage = serde_json::json!({
+            "additional_rate_limits": [{
+                "limit_name": "GPT-5.3-Codex-Spark",
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 2,
+                        "limit_window_seconds": 604800,
+                        "reset_at": 1787117711
+                    }
+                }
+            }]
+        });
+        let rate_limit = find_additional_rate_limit(&usage, "GPT-5.3-Codex-Spark").unwrap();
+        let window = parse_window(find_window(
+            rate_limit,
+            &["primary_window", "primary"],
+            604_800,
+        ))
+        .unwrap();
+        assert_eq!(window.remaining_percent, 98.0);
+        assert_eq!(window.window_seconds, 604_800);
     }
 
     #[test]

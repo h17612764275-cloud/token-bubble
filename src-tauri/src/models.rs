@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageWindow {
     pub remaining_percent: f64,
@@ -69,7 +69,7 @@ pub struct LocalUsageSummary {
     pub scanned_at: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSnapshot {
     pub provider: String,
@@ -77,6 +77,7 @@ pub struct ProviderSnapshot {
     pub plan: Option<String>,
     pub short_window: Option<UsageWindow>,
     pub weekly_window: Option<UsageWindow>,
+    pub spark_weekly_window: Option<UsageWindow>,
     pub reset_credits: Option<u64>,
     pub reset_credit_expires_at: Vec<String>,
     pub daily_token_usage: Option<Vec<DailyTokenUsage>>,
@@ -96,6 +97,7 @@ impl ProviderSnapshot {
             plan: None,
             short_window: None,
             weekly_window: None,
+            spark_weekly_window: None,
             reset_credits: None,
             reset_credit_expires_at: Vec::new(),
             daily_token_usage: None,
@@ -139,6 +141,10 @@ pub struct WidgetPreferences {
     pub voice_input_device: Option<String>,
     #[serde(default = "default_voice_sensitivity")]
     pub voice_sensitivity: f32,
+    #[serde(default = "default_voice_endpoint_seconds")]
+    pub voice_endpoint_seconds: f32,
+    #[serde(default)]
+    pub voice_punctuation_enabled: bool,
     #[serde(default = "default_screenshot_shortcut")]
     pub screenshot_shortcut: String,
     #[serde(default)]
@@ -169,6 +175,9 @@ fn default_voice_shortcut() -> String {
 fn default_voice_sensitivity() -> f32 {
     65.0
 }
+fn default_voice_endpoint_seconds() -> f32 {
+    3.0
+}
 fn default_screenshot_shortcut() -> String {
     "Ctrl+P".into()
 }
@@ -190,6 +199,8 @@ impl Default for WidgetPreferences {
             voice_shortcut: default_voice_shortcut(),
             voice_input_device: None,
             voice_sensitivity: default_voice_sensitivity(),
+            voice_endpoint_seconds: default_voice_endpoint_seconds(),
+            voice_punctuation_enabled: false,
             screenshot_shortcut: default_screenshot_shortcut(),
             screenshot_folder: String::new(),
         }
@@ -235,6 +246,11 @@ impl WidgetPreferences {
         } else {
             default_voice_sensitivity()
         };
+        self.voice_endpoint_seconds = if self.voice_endpoint_seconds.is_finite() {
+            self.voice_endpoint_seconds.clamp(1.0, 8.0)
+        } else {
+            default_voice_endpoint_seconds()
+        };
         if self.screenshot_shortcut.trim().is_empty() || self.screenshot_shortcut.len() > 64 {
             self.screenshot_shortcut = default_screenshot_shortcut();
         }
@@ -272,6 +288,8 @@ mod preference_tests {
         assert_eq!(value.voice_shortcut, "Ctrl+Space");
         assert_eq!(value.voice_input_device, None);
         assert_eq!(value.voice_sensitivity, 65.0);
+        assert_eq!(value.voice_endpoint_seconds, 3.0);
+        assert!(!value.voice_punctuation_enabled);
         assert_eq!(value.screenshot_shortcut, "Ctrl+P");
         assert_eq!(value.screenshot_folder, "");
     }

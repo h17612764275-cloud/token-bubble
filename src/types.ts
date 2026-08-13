@@ -73,6 +73,7 @@ export interface ProviderSnapshot {
   plan: string | null;
   shortWindow: UsageWindow | null;
   weeklyWindow: UsageWindow | null;
+  sparkWeeklyWindow?: UsageWindow | null;
   resetCredits: number | null;
   resetCreditExpiresAt?: string[];
   dailyTokenUsage?: DailyTokenUsage[] | null;
@@ -82,6 +83,13 @@ export interface ProviderSnapshot {
   updatedAt: string;
   status: SnapshotStatus;
   message: string | null;
+}
+
+export interface QuotaState {
+  snapshots: ProviderSnapshot[];
+  revision: number;
+  refreshing: boolean;
+  failureCount: number;
 }
 
 export interface WidgetPreferences {
@@ -102,6 +110,8 @@ export interface WidgetPreferences {
   voiceShortcut: string;
   voiceInputDevice: string | null;
   voiceSensitivity: number;
+  voiceEndpointSeconds: number;
+  voicePunctuationEnabled: boolean;
   screenshotShortcut: string;
   screenshotFolder: string;
 }

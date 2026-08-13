@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderSnapshot } from "../types";
+import type { ProviderSnapshot, QuotaState } from "../types";
 
 const api = vi.hoisted(() => ({
   calls: [] as string[],
   currentLabel: "widget",
-  invoke: vi.fn(async (command: string) => {
+  invoke: vi.fn(async (command: string): Promise<unknown> => {
     api.calls.push(`start:${command}`);
     await Promise.resolve();
     api.calls.push(`end:${command}`);
+    return undefined;
   }),
   getCurrentWindow: vi.fn(() => ({ label: api.currentLabel })),
   currentMonitor: vi.fn(async () => ({
@@ -91,30 +92,102 @@ describe("widget transitions", () => {
   });
 });
 
-describe("snapshot synchronization", () => {
-  it("publishes recovered quota data to the other quota window", async () => {
-    const { broadcastSnapshots } = await import("./bridge");
+describe("quota state", () => {
+  const quotaState: QuotaState = {
+    snapshots: [recoveredSnapshot],
+    revision: 7,
+    refreshing: false,
+    failureCount: 0,
+  };
 
-    await broadcastSnapshots([recoveredSnapshot]);
-    expect(events.emitTo).toHaveBeenLastCalledWith("tray-panel", "snapshots-updated", [recoveredSnapshot]);
+  it("reads the complete versioned state from the backend", async () => {
+    api.invoke.mockResolvedValueOnce(quotaState);
+    const { getQuotaState } = await import("./bridge");
 
-    api.currentLabel = "tray-panel";
-    await broadcastSnapshots([recoveredSnapshot]);
-    expect(events.emitTo).toHaveBeenLastCalledWith("widget", "snapshots-updated", [recoveredSnapshot]);
+    await expect(getQuotaState()).resolves.toEqual(quotaState);
+    expect(api.invoke).toHaveBeenCalledWith("get_quota_state");
   });
 
-  it("delivers recovered quota data through the desktop event contract", async () => {
-    const onSnapshots = vi.fn();
+  it("requests a coordinated backend refresh", async () => {
+    api.invoke.mockResolvedValueOnce(quotaState);
+    const { requestQuotaRefresh } = await import("./bridge");
+
+    await expect(requestQuotaRefresh()).resolves.toEqual(quotaState);
+    expect(api.invoke).toHaveBeenCalledWith("request_quota_refresh");
+  });
+
+  it("delivers the complete versioned state through the desktop event contract", async () => {
+    const onQuotaState = vi.fn();
     const { listenDesktopEvents } = await import("./bridge");
     const dispose = await listenDesktopEvents({
       onPreferences: vi.fn(),
-      onRefresh: vi.fn(),
       onUpdate: vi.fn(),
-      onSnapshots,
+      onQuotaState,
     });
 
-    events.listeners.get("snapshots-updated")?.({ payload: [recoveredSnapshot] });
-    expect(onSnapshots).toHaveBeenCalledWith([recoveredSnapshot]);
+    events.listeners.get("quota-state-changed")?.({ payload: quotaState });
+    expect(onQuotaState).toHaveBeenCalledWith(quotaState);
+    dispose();
+  });
+
+  it("cleans up earlier listeners when quota listener registration fails", async () => {
+    const unlistenPreferences = vi.fn();
+    const unlistenUpdate = vi.fn();
+    events.listen
+      .mockResolvedValueOnce(unlistenPreferences)
+      .mockResolvedValueOnce(unlistenUpdate)
+      .mockRejectedValueOnce(new Error("quota listener failed"));
+    const { listenDesktopEvents } = await import("./bridge");
+
+    await expect(listenDesktopEvents({
+      onPreferences: vi.fn(),
+      onUpdate: vi.fn(),
+      onQuotaState: vi.fn(),
+    })).rejects.toThrow("quota listener failed");
+
+    expect(unlistenPreferences).toHaveBeenCalledOnce();
+    expect(unlistenUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("cleans up every earlier listener when voice listener registration fails", async () => {
+    const unlistenPreferences = vi.fn();
+    const unlistenUpdate = vi.fn();
+    const unlistenQuota = vi.fn();
+    events.listen
+      .mockResolvedValueOnce(unlistenPreferences)
+      .mockResolvedValueOnce(unlistenUpdate)
+      .mockResolvedValueOnce(unlistenQuota)
+      .mockRejectedValueOnce(new Error("voice listener failed"));
+    const { listenDesktopEvents } = await import("./bridge");
+
+    await expect(listenDesktopEvents({
+      onPreferences: vi.fn(),
+      onUpdate: vi.fn(),
+      onQuotaState: vi.fn(),
+      onVoice: vi.fn(),
+    })).rejects.toThrow("voice listener failed");
+
+    expect(unlistenPreferences).toHaveBeenCalledOnce();
+    expect(unlistenUpdate).toHaveBeenCalledOnce();
+    expect(unlistenQuota).toHaveBeenCalledOnce();
+  });
+
+  it("does not use peer broadcasts for quota synchronization", async () => {
+    const bridge = await import("./bridge");
+    api.invoke.mockResolvedValue(quotaState);
+
+    const dispose = await bridge.listenDesktopEvents({
+      onPreferences: vi.fn(),
+      onUpdate: vi.fn(),
+      onQuotaState: vi.fn(),
+    });
+    await bridge.getQuotaState();
+    await bridge.requestQuotaRefresh();
+
+    expect(events.emitTo).not.toHaveBeenCalled();
+    expect("broadcastSnapshots" in bridge).toBe(false);
+    expect(events.listeners.has("snapshots-updated")).toBe(false);
+    expect(events.listeners.has("refresh-requested")).toBe(false);
     dispose();
   });
 });

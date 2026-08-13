@@ -1,6 +1,7 @@
 mod codex;
 mod local_usage;
 mod models;
+mod quota;
 mod screenshot;
 mod voice;
 
@@ -13,10 +14,11 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Mutex,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use models::{ProviderSnapshot, WidgetPreferences};
+use quota::{QuotaCoordinator, QuotaState};
 #[cfg(debug_assertions)]
 use models::UsageWindow;
 use serde::{Deserialize, Serialize};
@@ -51,12 +53,21 @@ fn start_voice(app: AppHandle, voice: State<'_, VoiceManager>, state: State<'_, 
         .map_err(|_| "语音输入设置不可用".to_string())?;
     let input_device = preferences.voice_input_device.clone();
     let sensitivity = preferences.voice_sensitivity;
+    let endpoint_seconds = preferences.voice_endpoint_seconds;
+    let punctuation_enabled = preferences.voice_punctuation_enabled;
     drop(preferences);
     if let Some(panel) = app.get_webview_window("tray-panel") {
         let _ = panel.hide();
     }
     voice::focus_text_target(target);
-    voice.start(app, target, input_device, sensitivity)
+    voice.start(
+        app,
+        target,
+        input_device,
+        sensitivity,
+        endpoint_seconds,
+        punctuation_enabled,
+    )
 }
 
 #[tauri::command]
@@ -223,8 +234,6 @@ struct AppState {
     client: reqwest::Client,
     preferences: Mutex<WidgetPreferences>,
     preferences_path: PathBuf,
-    fetch_lock: tokio::sync::Mutex<()>,
-    snapshot_cache: Mutex<Option<(Instant, Vec<ProviderSnapshot>)>>,
     #[cfg(debug_assertions)]
     simulate_short_window_for_testing: Mutex<bool>,
     geometry: Mutex<Option<WidgetGeometryState>>,
@@ -266,19 +275,25 @@ fn end_panel_resize(app: AppHandle, state: State<'_, AppState>) {
     finish_panel_resize_after(app, generation, Duration::ZERO);
 }
 
-fn apply_short_window_test_override(
-    _state: &AppState,
-    #[allow(unused_mut)]
-    mut snapshots: Vec<ProviderSnapshot>,
+async fn fetch_quota_snapshot(
+    client: reqwest::Client,
+    simulate_short_window_for_testing: bool,
 ) -> Vec<ProviderSnapshot> {
+    let mut snapshot = codex::fetch_snapshot(&client, true).await;
+    let usage_task = tokio::task::spawn_blocking(local_usage::collect_local_usage);
+    let exchange_rate = local_usage::fetch_usd_cny_rate(&client).await;
+    snapshot.local_usage = usage_task
+        .await
+        .ok()
+        .and_then(Result::ok);
+    if let (Some(usage), Some((rate, date))) = (&mut snapshot.local_usage, exchange_rate) {
+        usage.usd_cny_rate = rate;
+        usage.exchange_rate_date = date;
+    }
+    let mut values = vec![snapshot];
     #[cfg(debug_assertions)]
-    if _state
-        .simulate_short_window_for_testing
-        .lock()
-        .map(|value| *value)
-        .unwrap_or(false)
-    {
-        for snapshot in &mut snapshots {
+    if simulate_short_window_for_testing {
+        for snapshot in &mut values {
             if snapshot.status == "ok" {
                 snapshot.short_window = Some(UsageWindow {
                     remaining_percent: 88.0,
@@ -288,27 +303,7 @@ fn apply_short_window_test_override(
             }
         }
     }
-    snapshots
-}
-
-async fn fetch_snapshots_uncached(state: &State<'_, AppState>) -> Vec<ProviderSnapshot> {
-    let _guard = state.fetch_lock.lock().await;
-    let mut snapshot = codex::fetch_snapshot(&state.client, true).await;
-    let usage_task = tokio::task::spawn_blocking(local_usage::collect_local_usage);
-    let exchange_rate = local_usage::fetch_usd_cny_rate(&state.client).await;
-    snapshot.local_usage = usage_task
-        .await
-        .ok()
-        .and_then(Result::ok);
-    if let (Some(usage), Some((rate, date))) = (&mut snapshot.local_usage, exchange_rate) {
-        usage.usd_cny_rate = rate;
-        usage.exchange_rate_date = date;
-    }
-    let values = vec![snapshot];
-    if let Ok(mut cache) = state.snapshot_cache.lock() {
-        *cache = Some((Instant::now(), values.clone()));
-    }
-    apply_short_window_test_override(state.inner(), values)
+    values
 }
 
 fn load_preferences(path: &PathBuf) -> WidgetPreferences {
@@ -353,47 +348,74 @@ fn persist_preferences(path: &PathBuf, value: &WidgetPreferences) -> Result<(), 
     Ok(())
 }
 
-#[tauri::command]
-async fn get_snapshots(state: State<'_, AppState>) -> Result<Vec<ProviderSnapshot>, String> {
-    const CACHE_TTL: Duration = Duration::from_secs(30);
-    if let Ok(cache) = state.snapshot_cache.lock() {
-        if let Some((time, values)) = &*cache {
-            if time.elapsed() < CACHE_TTL {
-                return Ok(apply_short_window_test_override(&state, values.clone()));
-            }
-        }
-    }
-    let _guard = match state.fetch_lock.try_lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            if let Ok(cache) = state.snapshot_cache.lock() {
-                if let Some((_, values)) = &*cache {
-                    return Ok(apply_short_window_test_override(&state, values.clone()));
-                }
-            }
-            return Ok(vec![ProviderSnapshot::failure(
-                "unavailable",
-                "Quota refresh is already running.",
-            )]);
-        }
-    };
-    if let Ok(cache) = state.snapshot_cache.lock() {
-        if let Some((time, values)) = &*cache {
-            if time.elapsed() < CACHE_TTL {
-                return Ok(apply_short_window_test_override(&state, values.clone()));
-            }
-        }
-    }
-    let values = vec![codex::fetch_snapshot(&state.client, false).await];
-    if let Ok(mut cache) = state.snapshot_cache.lock() {
-        *cache = Some((Instant::now(), values.clone()));
-    }
-    Ok(apply_short_window_test_override(&state, values))
+async fn refresh_quota_for_app(app: AppHandle) -> QuotaState {
+    let coordinator = app.state::<QuotaCoordinator>().inner().clone();
+    let state = app.state::<AppState>();
+    let client = state.client.clone();
+    #[cfg(debug_assertions)]
+    let simulate = state
+        .simulate_short_window_for_testing
+        .lock()
+        .map(|value| *value)
+        .unwrap_or(false);
+    #[cfg(not(debug_assertions))]
+    let simulate = false;
+    coordinator
+        .refresh_with(move || fetch_quota_snapshot(client, simulate))
+        .await
 }
 
 #[tauri::command]
-async fn refresh_snapshots(state: State<'_, AppState>) -> Result<Vec<ProviderSnapshot>, String> {
-    Ok(fetch_snapshots_uncached(&state).await)
+async fn get_quota_state(coordinator: State<'_, QuotaCoordinator>) -> Result<QuotaState, String> {
+    Ok(coordinator.current().await)
+}
+
+#[tauri::command]
+async fn request_quota_refresh(app: AppHandle) -> Result<QuotaState, String> {
+    Ok(refresh_quota_for_app(app).await)
+}
+
+// Compatibility commands for the current WebViews; both delegate to the Rust-owned state.
+#[tauri::command]
+async fn get_snapshots(
+    coordinator: State<'_, QuotaCoordinator>,
+) -> Result<Vec<ProviderSnapshot>, String> {
+    Ok(coordinator.current().await.snapshots)
+}
+
+#[tauri::command]
+async fn refresh_snapshots(app: AppHandle) -> Result<Vec<ProviderSnapshot>, String> {
+    Ok(refresh_quota_for_app(app).await.snapshots)
+}
+
+fn trigger_quota_refresh(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let _ = refresh_quota_for_app(app).await;
+    });
+}
+
+fn start_quota_background_tasks(app: AppHandle) {
+    let coordinator = app.state::<QuotaCoordinator>().inner().clone();
+    let mut changed = coordinator.subscribe();
+    let mut schedule_changed = coordinator.subscribe();
+    let event_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while let Some(state) = quota::recv_next_state(&mut changed).await {
+            let _ = event_app.emit("quota-state-changed", state);
+        }
+    });
+    tauri::async_runtime::spawn(async move {
+        let mut completed = refresh_quota_for_app(app.clone()).await;
+        loop {
+            if quota::wait_for_refresh_due(&mut schedule_changed, completed)
+                .await
+                .is_none()
+            {
+                break;
+            }
+            completed = refresh_quota_for_app(app.clone()).await;
+        }
+    });
 }
 
 fn clamp_position_to_monitor(
@@ -1013,6 +1035,7 @@ fn set_preferences(
     preferences: WidgetPreferences,
     app: AppHandle,
     state: State<'_, AppState>,
+    voice: State<'_, VoiceManager>,
 ) -> Result<(), String> {
     let preferences = preferences.normalized();
     let mut stored_preferences = state
@@ -1020,6 +1043,13 @@ fn set_preferences(
         .lock()
         .map_err(|_| "settings unavailable".to_string())?;
     let previous = stored_preferences.clone();
+    let restart_voice = (previous.voice_enabled != preferences.voice_enabled)
+        || (previous.voice_input_device != preferences.voice_input_device)
+        || (previous.voice_sensitivity != preferences.voice_sensitivity)
+        || (previous.voice_endpoint_seconds != preferences.voice_endpoint_seconds)
+        || (previous.voice_punctuation_enabled != preferences.voice_punctuation_enabled);
+    let should_start_voice = !previous.voice_enabled && preferences.voice_enabled;
+    let should_stop_voice = previous.voice_enabled && !preferences.voice_enabled;
     let previous_shortcut = previous.screenshot_shortcut.clone();
     let shortcut_changed = previous_shortcut != preferences.screenshot_shortcut;
     let previous_shortcut_registered = shortcut_changed
@@ -1067,7 +1097,15 @@ fn set_preferences(
     }
     *stored_preferences = preferences.clone();
     drop(stored_preferences);
-    let _ = app.emit("preferences-changed", preferences);
+    let _ = app.emit("preferences-changed", preferences.clone());
+    if restart_voice {
+        if should_stop_voice || (previous.voice_enabled && preferences.voice_enabled) {
+            voice.stop();
+        }
+        if should_start_voice || (previous.voice_enabled && preferences.voice_enabled) {
+            start_voice(app, voice, state)?;
+        }
+    }
     Ok(())
 }
 
@@ -1152,6 +1190,14 @@ fn show_floating_widget(app: AppHandle) -> Result<(), String> {
         .ok_or_else(|| "widget window missing".to_string())?;
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_floating_widget_visible(app: AppHandle) -> Result<bool, String> {
+    let window = app
+        .get_webview_window("widget")
+        .ok_or_else(|| "widget window missing".to_string())?;
+    window.is_visible().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1290,7 +1336,7 @@ fn toggle_panel_from_widget(app: AppHandle) -> Result<bool, String> {
         .map_err(|error| error.to_string())?;
     panel.show().map_err(|error| error.to_string())?;
     panel.set_focus().map_err(|error| error.to_string())?;
-    let _ = app.emit_to("tray-panel", "refresh-requested", ());
+    trigger_quota_refresh(app.clone());
     Ok(true)
 }
 
@@ -1421,7 +1467,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                 }
             }
             "refresh" => {
-                let _ = app.emit("refresh-requested", ());
+                trigger_quota_refresh(app.clone());
             }
             "codexscope" => {
                 if let Err(error) = open_codexscope(app) {
@@ -1438,8 +1484,8 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                     if let Ok(mut enabled) = state.simulate_short_window_for_testing.lock() {
                         *enabled = !*enabled;
                         let _ = test_short_window_menu.set_checked(*enabled);
-                        let _ = app.emit("refresh-requested", ());
                     }
+                    trigger_quota_refresh(app.clone());
                 }
             }
             "unlock" => {
@@ -1592,8 +1638,6 @@ pub fn run() {
                 client,
                 preferences: Mutex::new(preferences.clone()),
                 preferences_path,
-                fetch_lock: tokio::sync::Mutex::new(()),
-                snapshot_cache: Mutex::new(None),
                 #[cfg(debug_assertions)]
                 simulate_short_window_for_testing: Mutex::new(false),
                 geometry: Mutex::new(None),
@@ -1601,6 +1645,8 @@ pub fn run() {
                 panel_resize_active: AtomicBool::new(false),
                 panel_resize_generation: AtomicU64::new(0),
             });
+            app.manage(QuotaCoordinator::new());
+            start_quota_background_tasks(app.handle().clone());
             app.manage(VoiceManager::new(voice_model_dir));
             app.manage(screenshot::ScreenshotManager::default());
             if let Err(error) = register_screenshot_shortcut(app.handle(), &preferences.screenshot_shortcut) {
@@ -1625,6 +1671,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_quota_state,
+            request_quota_refresh,
             get_snapshots,
             refresh_snapshots,
             expand_widget,
@@ -1636,6 +1684,7 @@ pub fn run() {
             set_widget_locked,
             set_widget_always_on_top,
             show_floating_widget,
+            get_floating_widget_visible,
             toggle_floating_widget,
             set_widget_position_locked,
             resize_floating_widget,
@@ -1733,7 +1782,7 @@ pub fn run() {
         .expect("failed to build Token Bubble");
     app.run(|app_handle, event| {
         if matches!(event, tauri::RunEvent::Resumed) {
-            let _ = app_handle.emit("refresh-requested", ());
+            trigger_quota_refresh(app_handle.clone());
         }
     });
 }

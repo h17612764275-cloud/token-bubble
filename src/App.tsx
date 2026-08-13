@@ -1,20 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { QuotaCard, QuotaOrb } from "./components/QuotaCard";
+import { QuotaOrb } from "./components/QuotaCard";
 import { PinnedScreenshot } from "./components/PinnedScreenshot";
 import { ScreenshotOverlay } from "./components/ScreenshotOverlay";
 import { TrayPanel } from "./components/TrayPanel";
-import { broadcastSnapshots, fetchSnapshots, getPreferences, listenDesktopEvents, registerVoiceShortcut, resizeFloatingWidget, setWidgetExpanded, setWidgetPositionLocked, startDragging, startVoice, stopVoice, toggleFloatingWidget, togglePanelFromWidget, updatePreferences } from "./lib/bridge";
-import { needsFastRefresh } from "./lib/format";
+import { getPreferences, getQuotaState, listenDesktopEvents, registerVoiceShortcut, requestQuotaRefresh, resizeFloatingWidget, setWidgetExpanded, setWidgetPositionLocked, startDragging, startVoice, stopVoice, toggleFloatingWidget, togglePanelFromWidget, updatePreferences } from "./lib/bridge";
 import { checkForAppUpdate } from "./lib/appUpdate";
 import { copy, normalizeLanguage } from "./lib/i18n";
-import { filterSnapshotUpdates, mergeSnapshotUpdates, mergeSnapshots } from "./lib/snapshots";
 import { recordDailyUsage } from "./lib/dailyUsage";
 import { withPanelAccentColor, withWidgetStyle } from "./lib/skin";
 import { recordVoiceText } from "./lib/voiceHistory";
-import type { ProviderSnapshot, VoiceEvent, WidgetPreferences } from "./types";
+import type { ProviderSnapshot, QuotaState, VoiceEvent, WidgetPreferences } from "./types";
 
-const DEFAULT_PREFS: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#faa4ce", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: null, autoRotateSeconds: 12, language: "zh-CN", voiceEnabled: false, voiceShortcut: "Ctrl+Space", voiceInputDevice: null, voiceSensitivity: 65, screenshotShortcut: "Ctrl+P", screenshotFolder: "" };
+const DEFAULT_PREFS: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#faa4ce", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: null, autoRotateSeconds: 12, language: "zh-CN", voiceEnabled: false, voiceShortcut: "Ctrl+Space", voiceInputDevice: null, voiceSensitivity: 65, voiceEndpointSeconds: 3, voicePunctuationEnabled: false, screenshotShortcut: "Ctrl+P", screenshotFolder: "" };
+const DESKTOP_LISTENER_RETRY_MS = 1_000;
 
 export default function App() {
   const bootstrap = window as typeof window & { __TOKEN_BUBBLE_VIEW__?: string };
@@ -36,16 +35,25 @@ function QuotaApp({ isTrayPanel }: { isTrayPanel: boolean }) {
   const [consumingProviders, setConsumingProviders] = useState<Set<string>>(() => new Set());
   const [operationError, setOperationError] = useState<string | null>(null);
   const [showUpdateFallback, setShowUpdateFallback] = useState(false);
-  const failures = useRef(0);
-  const snapshotsRef = useRef<ProviderSnapshot[]>([]);
-  const successfulSnapshotVersions = useRef(new Map<ProviderSnapshot["provider"], number>());
+  const quotaRevision = useRef(-1);
   const previousPrimary = useRef(new Map<string, number>());
   const consumptionTimers = useRef(new Map<string, number>());
   const collapseTimer = useRef<number | null>(null);
   const hoverSequence = useRef(0);
   const preferencesRef = useRef(preferences);
+  const mounted = useRef(false);
+  const mountGeneration = useRef(0);
   const language = normalizeLanguage(preferences.language);
   const t = copy[language];
+
+  useEffect(() => {
+    mounted.current = true;
+    mountGeneration.current += 1;
+    return () => {
+      mounted.current = false;
+      mountGeneration.current += 1;
+    };
+  }, []);
 
   const checkUpdate = useCallback((manual = false) => {
     setShowUpdateFallback(false);
@@ -62,22 +70,26 @@ function QuotaApp({ isTrayPanel }: { isTrayPanel: boolean }) {
       if (message === t.updateFailed) setShowUpdateFallback(true);
     }, manual);
   }, [language, t]);
+  const checkUpdateRef = useRef(checkUpdate);
 
-  const applySnapshots = useCallback((values: ProviderSnapshot[], mode: "full" | "partial" = "full"): ProviderSnapshot[] => {
-    const accepted = filterSnapshotUpdates(snapshotsRef.current, values);
-    if (accepted.length === 0) return [];
-    const effectiveMode = mode === "partial" || accepted.length < values.length ? "partial" : "full";
-    const next = effectiveMode === "partial"
-      ? mergeSnapshotUpdates(snapshotsRef.current, accepted)
-      : mergeSnapshots(snapshotsRef.current, accepted);
-    snapshotsRef.current = next;
+  useEffect(() => {
+    checkUpdateRef.current = checkUpdate;
+  }, [checkUpdate]);
 
-    for (const item of accepted) {
-      if (item.status === "ok") {
-        successfulSnapshotVersions.current.set(item.provider, (successfulSnapshotVersions.current.get(item.provider) ?? 0) + 1);
+  const applyQuotaState = useCallback((state: QuotaState): boolean => {
+    if (!mounted.current) return false;
+    if (state.revision <= quotaRevision.current) return false;
+    quotaRevision.current = state.revision;
+    setSnapshots(state.snapshots);
+
+    for (const item of state.snapshots) {
+      if (item.status !== "ok") continue;
+      const nextPrimary = item.shortWindow?.remainingPercent;
+      if (state.refreshing) {
+        if (nextPrimary !== undefined) previousPrimary.current.set(item.provider, nextPrimary);
+        continue;
       }
       recordDailyUsage(item);
-      const nextPrimary = item.shortWindow?.remainingPercent;
       const previous = previousPrimary.current.get(item.provider);
       if (nextPrimary !== undefined && previous !== undefined && nextPrimary < previous) {
         setConsumingProviders((current) => new Set(current).add(item.provider));
@@ -91,45 +103,20 @@ function QuotaApp({ isTrayPanel }: { isTrayPanel: boolean }) {
       }
       if (nextPrimary !== undefined) previousPrimary.current.set(item.provider, nextPrimary);
     }
-    const hasFailure = next.some((item) => item.status !== "ok");
-    if (effectiveMode === "full") failures.current = hasFailure ? failures.current + 1 : 0;
-    else failures.current = hasFailure ? Math.max(1, failures.current) : 0;
-    setSnapshots(next);
-    return accepted;
+    return true;
   }, []);
 
-  const refresh = useCallback(async (force = false) => {
-    const versionsAtStart = new Map(successfulSnapshotVersions.current);
+  const refresh = useCallback(async () => {
+    const generation = mountGeneration.current;
     try {
-      const values = await fetchSnapshots(force);
-      const accepted = values.filter((item) => item.status === "ok"
-        || (successfulSnapshotVersions.current.get(item.provider) ?? 0) === (versionsAtStart.get(item.provider) ?? 0));
-      const applied = accepted.length > 0
-        ? applySnapshots(accepted, accepted.length === values.length ? "full" : "partial")
-        : [];
-      const successful = applied.filter((item) => item.status === "ok");
-      if (successful.length > 0) void broadcastSnapshots(successful).catch(() => undefined);
+      const state = await requestQuotaRefresh();
+      if (mounted.current && mountGeneration.current === generation) applyQuotaState(state);
     } catch {
-      setSnapshots((current) => {
-        if (current.length === 0) {
-          failures.current += 1;
-          const next = [{ provider: "codex", displayName: "CODEX", plan: null, shortWindow: null, weeklyWindow: null, resetCredits: null, resetCreditExpiresAt: [], updatedAt: new Date().toISOString(), status: "unavailable", message: "Quota is temporarily unavailable. It will retry automatically." } satisfies ProviderSnapshot];
-          snapshotsRef.current = next;
-          return next;
-        }
-        let degraded = false;
-        const next = current.map((item) => {
-          const changedSinceStart = (successfulSnapshotVersions.current.get(item.provider) ?? 0) !== (versionsAtStart.get(item.provider) ?? 0);
-          if (changedSinceStart) return item;
-          degraded = true;
-          return { ...item, status: "stale" as const, message: "Refresh failed. Please try again later." };
-        });
-        if (degraded) failures.current += 1;
-        snapshotsRef.current = next;
-        return next;
-      });
+      if (mounted.current && mountGeneration.current === generation) {
+        setOperationError("Quota refresh request failed.");
+      }
     }
-  }, [applySnapshots]);
+  }, [applyQuotaState]);
 
   useEffect(() => {
     void getPreferences().then((value) => setPreferences({ ...DEFAULT_PREFS, ...value, language: normalizeLanguage(value.language) })).catch(() => setOperationError("Unable to read settings. Defaults are in use."));
@@ -138,45 +125,68 @@ function QuotaApp({ isTrayPanel }: { isTrayPanel: boolean }) {
       consumptionTimers.current.clear();
       if (collapseTimer.current !== null) window.clearTimeout(collapseTimer.current);
     };
-  }, [refresh]);
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    let cleanup: () => void = () => {};
-    void listenDesktopEvents({
-      onPreferences: (value) => setPreferences({ ...DEFAULT_PREFS, ...value, language: normalizeLanguage(value.language) }),
-      onRefresh: () => void refresh(true),
-      onUpdate: () => checkUpdate(true),
-      onSnapshots: (values) => applySnapshots(values, "partial"),
-      onVoice: (value) => {
-        setVoiceEvent(value);
-        if (value.finalText) {
-          if (!isTrayPanel) recordVoiceText(value.finalText);
-          window.setTimeout(() => setVoiceRevision((revision) => revision + 1), 0);
+    let disposed = false;
+    let cleanupListener: () => void = () => {};
+    let retryTimer: number | null = null;
+    const generation = mountGeneration.current;
+    const active = () => !disposed && mounted.current && mountGeneration.current === generation;
+    const readState = async () => {
+      try {
+        const state = await getQuotaState();
+        if (active()) applyQuotaState(state);
+      } catch {
+        if (active()) setOperationError("Unable to read quota state.");
+      }
+    };
+    const connect = async () => {
+      try {
+        const cleanup = await listenDesktopEvents({
+          onPreferences: (value) => { if (active()) setPreferences({ ...DEFAULT_PREFS, ...value, language: normalizeLanguage(value.language) }); },
+          onUpdate: () => { if (active()) checkUpdateRef.current(true); },
+          onQuotaState: (state) => { if (active()) applyQuotaState(state); },
+          onVoice: (value) => {
+            if (!active()) return;
+            setVoiceEvent(value);
+            if (value.finalText) {
+              if (!isTrayPanel) recordVoiceText(value.finalText);
+              window.setTimeout(() => { if (active()) setVoiceRevision((revision) => revision + 1); }, 0);
+            }
+            if (value.message) setOperationError(value.message);
+          },
+        });
+        if (!active()) {
+          cleanup();
+          return;
         }
-        if (value.message) setOperationError(value.message);
-      },
-    }).then((value) => {
-      if (cancelled) value();
-      else {
-        cleanup = value;
-        void refresh(true);
-      }
-    }).catch(() => {
-      if (!cancelled) {
+        cleanupListener = cleanup;
+        void readState();
+      } catch {
+        if (!active()) return;
         setOperationError("Desktop event listener failed to start.");
-        void refresh(true);
+        void readState();
+        retryTimer = window.setTimeout(() => {
+          retryTimer = null;
+          void connect();
+        }, DESKTOP_LISTENER_RETRY_MS);
       }
-    });
-    return () => { cancelled = true; cleanup(); };
-  }, [applySnapshots, checkUpdate, isTrayPanel, refresh]);
+    };
+    void connect();
+    return () => {
+      disposed = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+      cleanupListener();
+    };
+  }, [applyQuotaState, isTrayPanel]);
 
   useEffect(() => {
     if (isTrayPanel) return;
     setVoiceEvent((current) => ({ ...current, status: preferences.voiceEnabled ? "starting" : "disabled", level: 0 }));
     void (preferences.voiceEnabled ? stopVoice().then(() => startVoice()) : stopVoice())
       .catch(() => setOperationError(preferences.voiceEnabled ? "语音模式启动失败。" : "语音模式停止失败。"));
-  }, [isTrayPanel, preferences.voiceEnabled, preferences.voiceInputDevice, preferences.voiceSensitivity]);
+  }, [isTrayPanel, preferences.voiceEnabled, preferences.voiceInputDevice, preferences.voiceSensitivity, preferences.voiceEndpointSeconds, preferences.voicePunctuationEnabled]);
 
   useEffect(() => {
     preferencesRef.current = preferences;
@@ -208,19 +218,8 @@ function QuotaApp({ isTrayPanel }: { isTrayPanel: boolean }) {
     return () => window.clearTimeout(timer);
   }, [checkUpdate, isTrayPanel]);
 
-  const refreshMs = useMemo(() => {
-    const backoff = failures.current === 0 ? 5 * 60_000 : Math.min(30 * 60_000, 30_000 * 2 ** (failures.current - 1));
-    if (failures.current === 0 && snapshots.some((item) => item.status === "ok" && needsFastRefresh(item))) return 60_000;
-    return backoff;
-  }, [snapshots]);
-
   useEffect(() => {
-    const id = window.setInterval(() => void refresh(), refreshMs);
-    return () => window.clearInterval(id);
-  }, [refresh, refreshMs]);
-
-  useEffect(() => {
-    const refreshWhenActive = () => { if (document.visibilityState === "visible") void refresh(true); };
+    const refreshWhenActive = () => { if (document.visibilityState === "visible") void refresh(); };
     window.addEventListener("focus", refreshWhenActive);
     document.addEventListener("visibilitychange", refreshWhenActive);
     return () => {
@@ -244,7 +243,15 @@ function QuotaApp({ isTrayPanel }: { isTrayPanel: boolean }) {
     preferencesRef.current = next;
     setPreferences(next);
     setOperationError(null);
-    void updatePreferences(next).catch(() => { preferencesRef.current = previous; setPreferences(previous); setOperationError("Settings could not be saved. Previous state restored."); });
+    void updatePreferences(next).catch((error) => {
+      preferencesRef.current = previous;
+      setPreferences(previous);
+      setOperationError(
+        error instanceof Error && error.message
+          ? `Settings could not be saved: ${error.message}`
+          : "Settings could not be saved. Previous state restored.",
+      );
+    });
   }, [preferences]);
 
   const handleHover = useCallback((value: boolean) => {
@@ -254,7 +261,6 @@ function QuotaApp({ isTrayPanel }: { isTrayPanel: boolean }) {
     }
     setHovered(value);
     if (!value && preferences.stayExpanded) return;
-    if (value) void refresh(true);
     if (value) {
       const sequence = ++hoverSequence.current;
       void setWidgetExpanded(true)
@@ -280,7 +286,8 @@ function QuotaApp({ isTrayPanel }: { isTrayPanel: boolean }) {
       <TrayPanel
         snapshot={current}
         preferences={preferences}
-        onRefresh={() => void refresh(true)}
+        operationError={operationError}
+        onRefresh={() => void refresh()}
         onToggleWidget={() => toggleFloatingWidget()}
         onTogglePositionLock={() => setWidgetPositionLocked(!preferences.positionLocked).then((value) => setPreferences({ ...DEFAULT_PREFS, ...value }))}
         onResizeWidget={(larger) => resizeFloatingWidget(larger).then((value) => setPreferences({ ...DEFAULT_PREFS, ...value }))}
@@ -294,11 +301,19 @@ function QuotaApp({ isTrayPanel }: { isTrayPanel: boolean }) {
         }}
         voiceEvent={voiceEvent}
         voiceRevision={voiceRevision}
-        onVoicePreferencesChange={(voiceEnabled, voiceShortcut, voiceInputDevice, voiceSensitivity) => savePreferences({ ...preferences, voiceEnabled, voiceShortcut, voiceInputDevice, voiceSensitivity })}
+        onVoicePreferencesChange={(voiceEnabled, voiceShortcut, voiceInputDevice, voiceSensitivity, voiceEndpointSeconds, voicePunctuationEnabled) => savePreferences({
+          ...preferences,
+          voiceEnabled,
+          voiceShortcut,
+          voiceInputDevice,
+          voiceSensitivity,
+          voiceEndpointSeconds,
+          voicePunctuationEnabled,
+        })}
         onScreenshotPreferencesChange={(screenshotShortcut, screenshotFolder) => savePreferences({ ...preferences, screenshotShortcut, screenshotFolder })}
       />
     );
   }
 
-  return <QuotaOrb snapshot={current} language={language} positionLocked={preferences.positionLocked} widgetSize={preferences.widgetSize} accentColor={preferences.accentColor} widgetStyle={preferences.widgetStyle} voiceEvent={voiceEvent} onDrag={() => startDragging()} onHover={(value) => { setHovered(value); if (value && (current.status === "unavailable" || current.status === "stale")) void refresh(true); }} onOpenPanel={() => togglePanelFromWidget()} />;
+  return <QuotaOrb snapshot={current} language={language} positionLocked={preferences.positionLocked} widgetSize={preferences.widgetSize} accentColor={preferences.accentColor} widgetStyle={preferences.widgetStyle} voiceEvent={voiceEvent} onDrag={() => startDragging()} onHover={(value) => { setHovered(value); if (value && (current.status === "unavailable" || current.status === "stale")) void refresh(); }} onOpenPanel={() => togglePanelFromWidget()} />;
 }

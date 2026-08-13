@@ -169,12 +169,23 @@ export const QuotaCard = memo(function QuotaCard({
 
 export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, onOpenPanel, language = "zh-CN", positionLocked = false, widgetSize = 68, accentColor = "#b97892", widgetStyle = "bubble", voiceEvent = { status: "disabled", level: 0 } }: Pick<Props, "snapshot" | "onDrag" | "onHover" | "onOpenPanel"> & { language?: Language; positionLocked?: boolean; widgetSize?: number; accentColor?: string; widgetStyle?: WidgetStyle; voiceEvent?: VoiceEvent }) {
   const [idle, setIdle] = useState(false);
+  const [quotaMode, setQuotaMode] = useState<"codex" | "spark">("codex");
+  const [switchPhase, setSwitchPhase] = useState<"idle" | "covering" | "revealing">("idle");
   const idleTimer = useRef<number | null>(null);
+  const quotaModeRef = useRef<"codex" | "spark">("codex");
+  const switchingRef = useRef(false);
+  const switchTimers = useRef<number[]>([]);
+  const autoReturnTimer = useRef<number | null>(null);
+  const pendingClickTimer = useRef<number | null>(null);
+  const pressRef = useRef<{ x: number; y: number; dragged: boolean } | null>(null);
   const activeLanguage = normalizeLanguage(language);
   const t = copy[activeLanguage];
   const primary = snapshot.shortWindow ? clampPercent(snapshot.shortWindow.remainingPercent) : null;
   const weekly = snapshot.weeklyWindow ? clampPercent(snapshot.weeklyWindow.remainingPercent) : null;
-  const displayPercent = primary ?? weekly;
+  const codexPercent = primary ?? weekly;
+  const sparkPercent = snapshot.sparkWeeklyWindow ? clampPercent(snapshot.sparkWeeklyWindow.remainingPercent) : null;
+  const showingSpark = quotaMode === "spark" && sparkPercent !== null;
+  const displayPercent = showingSpark ? sparkPercent : codexPercent;
   const displayingWeeklyAsPrimary = primary === null && weekly !== null;
   const tier = quotaTier(displayPercent);
   const available = snapshot.status === "ok" && displayPercent !== null;
@@ -202,8 +213,50 @@ export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, onOp
     idleTimer.current = window.setTimeout(() => setIdle(true), 2000);
     return () => {
       if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);
+      switchTimers.current.forEach((timer) => window.clearTimeout(timer));
+      if (autoReturnTimer.current !== null) window.clearTimeout(autoReturnTimer.current);
+      if (pendingClickTimer.current !== null) window.clearTimeout(pendingClickTimer.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (sparkPercent !== null || quotaModeRef.current !== "spark") return;
+    quotaModeRef.current = "codex";
+    setQuotaMode("codex");
+    setSwitchPhase("idle");
+    switchingRef.current = false;
+  }, [sparkPercent]);
+
+  const runQuotaSwitch = (target: "codex" | "spark") => {
+    if (widgetStyle !== "bubble" || sparkPercent === null || switchingRef.current || quotaModeRef.current === target) return;
+    switchingRef.current = true;
+    if (autoReturnTimer.current !== null) {
+      window.clearTimeout(autoReturnTimer.current);
+      autoReturnTimer.current = null;
+    }
+    setSwitchPhase("covering");
+    const revealTimer = window.setTimeout(() => {
+      quotaModeRef.current = target;
+      setQuotaMode(target);
+      setSwitchPhase("revealing");
+    }, 340);
+    const finishTimer = window.setTimeout(() => {
+      switchingRef.current = false;
+      setSwitchPhase("idle");
+      if (target === "spark") {
+        autoReturnTimer.current = window.setTimeout(() => runQuotaSwitch("codex"), 5_000);
+      }
+    }, 680);
+    switchTimers.current.push(revealTimer, finishTimer);
+  };
+
+  const maybeStartDrag = (clientX: number, clientY: number) => {
+    const press = pressRef.current;
+    if (!press || press.dragged) return;
+    if (Math.hypot(clientX - press.x, clientY - press.y) < 4) return;
+    press.dragged = true;
+    if (!positionLocked) void onDrag();
+  };
 
   const handleMouseEnter = () => {
     if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);
@@ -213,20 +266,40 @@ export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, onOp
 
   return (
     <main
-      className={`quota-orb quota-orb--${widgetStyle} quota-card--${snapshot.status} quota-card--${tier}${displayingWeeklyAsPrimary ? " quota-orb--weekly" : ""}${idle ? " quota-orb--idle" : ""} quota-orb--voice-${voiceEvent.status}`}
+      className={`quota-orb quota-orb--${widgetStyle} quota-card--${snapshot.status} quota-card--${tier}${displayingWeeklyAsPrimary ? " quota-orb--weekly" : ""}${showingSpark ? " quota-orb--spark" : ""}${idle ? " quota-orb--idle" : ""} quota-orb--voice-${voiceEvent.status}`}
       style={responsiveStyle}
       onMouseEnter={handleMouseEnter}
-      onMouseLeave={() => onHover(false)}
+      onMouseLeave={(event) => {
+        if (event.buttons === 1) maybeStartDrag(event.clientX, event.clientY);
+        onHover(false);
+      }}
       onMouseDown={(event) => {
         if (event.button !== 0) return;
         if (event.detail >= 2) {
           event.preventDefault();
+          pressRef.current = null;
+          if (pendingClickTimer.current !== null) {
+            window.clearTimeout(pendingClickTimer.current);
+            pendingClickTimer.current = null;
+          }
           void onOpenPanel?.();
           return;
         }
-        if (!positionLocked) void onDrag();
+        pressRef.current = { x: event.clientX, y: event.clientY, dragged: false };
       }}
-      aria-label={available ? (displayingWeeklyAsPrimary ? t.weeklyAvailableLabel(displayPercent!) : t.availableLabel(displayPercent!)) : localizedBackendMessage(snapshot.message, activeLanguage) ?? t.unavailableStatus}
+      onMouseMove={(event) => maybeStartDrag(event.clientX, event.clientY)}
+      onMouseUp={(event) => {
+        if (event.button !== 0) return;
+        const press = pressRef.current;
+        pressRef.current = null;
+        if (!press || press.dragged || event.detail >= 2) return;
+        if (pendingClickTimer.current !== null) window.clearTimeout(pendingClickTimer.current);
+        pendingClickTimer.current = window.setTimeout(() => {
+          pendingClickTimer.current = null;
+          runQuotaSwitch(quotaModeRef.current === "spark" ? "codex" : "spark");
+        }, 260);
+      }}
+      aria-label={available ? (showingSpark ? (activeLanguage === "zh-CN" ? `Spark 本周剩余 ${displayPercent}%` : `Spark weekly quota remaining ${displayPercent}%`) : displayingWeeklyAsPrimary ? t.weeklyAvailableLabel(displayPercent!) : t.availableLabel(displayPercent!)) : localizedBackendMessage(snapshot.message, activeLanguage) ?? t.unavailableStatus}
     >
       <div className="aurora" aria-hidden="true" />
       {widgetStyle === "bubble" ? <img className="orb-bubble-glass" src={bubbleGlass} alt="" aria-hidden="true" /> : null}
@@ -245,6 +318,7 @@ export const QuotaOrb = memo(function QuotaOrb({ snapshot, onDrag, onHover, onOp
             <StatusIcon status={snapshot.status} />
           </section>
         )}
+        {widgetStyle === "bubble" ? <div className={`orb-switch-cloud orb-switch-cloud--${switchPhase}`} aria-hidden="true" /> : null}
       </div>
       <section className={`orb-voice${voiceActive ? " is-visible" : ""}`} aria-hidden={!voiceActive} aria-label={voiceEvent.status === "listening" ? "正在聆听" : "正在识别"}>
           <div className="orb-waveform" aria-hidden="true">

@@ -29,6 +29,8 @@ const preferences: WidgetPreferences = {
   voiceShortcut: "Ctrl+Space",
   voiceInputDevice: null,
   voiceSensitivity: 65,
+  voiceEndpointSeconds: 3,
+  voicePunctuationEnabled: false,
   screenshotShortcut: "Ctrl+P",
   screenshotFolder: "",
 };

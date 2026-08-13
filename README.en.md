@@ -9,12 +9,12 @@ Token Bubble is derived from **Quota Float** and integrates **CodexScope** for l
 ## Download
 
 - [Download the latest installer](https://github.com/h17612764275-cloud/token-bubble/releases/latest)
-- Current published version: `v0.2.1`
+- Current version: `v0.2.2`
 - Windows users should download the `.exe` installer from the Release.
 
-## Current `main` updates (2026-08-11)
+## v0.2.2 updates (2026-08-11)
 
-> These changes are available in the `main` source tree. The latest packaged GitHub Release is still `v0.2.1` and has not been rebuilt with them yet.
+> These are the main `v0.2.2` updates; installer and source versions stay aligned.
 
 - **Windows local screenshots and pinned captures:** Configure capture from the panel's camera button, then start with a global shortcut (`Ctrl+P` by default). Select, move, and resize a region, then annotate it with rectangles, ellipses, arrows, freehand strokes, mosaic, or text. Capture, clipboard copy, and pinned images are currently Windows-only.
 - **Save, clipboard, and pin:** Confirming saves a PNG and copies it to the clipboard. A selection can also be saved elsewhere or opened as a draggable, resizable, always-on-top image.

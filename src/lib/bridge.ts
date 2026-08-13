@@ -1,6 +1,26 @@
-import type { ProviderSnapshot, VoiceEvent, WidgetPreferences } from "../types";
+﻿import type { ProviderSnapshot, QuotaState, VoiceEvent, WidgetPreferences } from "../types";
 
-const defaultPreferences: WidgetPreferences = { locked: false, positionLocked: false, widgetSize: 68, accentColor: "#b97892", bubblePanelAccentColor: "#faa4ce", widgetStyle: "bubble", alwaysOnTop: true, stayExpanded: false, pinnedProvider: null, autoRotateSeconds: 12, language: "zh-CN", voiceEnabled: false, voiceShortcut: "Ctrl+Space", voiceInputDevice: null, voiceSensitivity: 65, screenshotShortcut: "Ctrl+P", screenshotFolder: "" };
+const defaultPreferences: WidgetPreferences = {
+  locked: false,
+  positionLocked: false,
+  widgetSize: 68,
+  accentColor: "#b97892",
+  bubblePanelAccentColor: "#faa4ce",
+  widgetStyle: "bubble",
+  alwaysOnTop: true,
+  stayExpanded: false,
+  pinnedProvider: null,
+  autoRotateSeconds: 12,
+  language: "zh-CN",
+  voiceEnabled: false,
+  voiceShortcut: "Ctrl+Space",
+  voiceInputDevice: null,
+  voiceSensitivity: 65,
+  voiceEndpointSeconds: 3,
+  voicePunctuationEnabled: false,
+  screenshotShortcut: "Ctrl+P",
+  screenshotFolder: "",
+};
 
 const mockSnapshot: ProviderSnapshot = {
   provider: "codex",
@@ -84,22 +104,16 @@ export async function listenWidgetMotion(handler: (position: WidgetMotionPayload
   return listen<WidgetMotionPayload>("widget-motion", (event) => handler(event.payload));
 }
 
-export async function fetchSnapshots(force = false): Promise<ProviderSnapshot[]> {
-  if (!isTauri()) return [mockSnapshot];
+export async function getQuotaState(): Promise<QuotaState> {
+  if (!isTauri()) return { snapshots: [mockSnapshot], revision: 1, refreshing: false, failureCount: 0 };
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<ProviderSnapshot[]>(force ? "refresh_snapshots" : "get_snapshots");
+  return invoke<QuotaState>("get_quota_state");
 }
 
-export async function broadcastSnapshots(values: ProviderSnapshot[]): Promise<void> {
-  if (!isTauri()) return;
-  const [{ emitTo }, { getCurrentWindow }] = await Promise.all([
-    import("@tauri-apps/api/event"),
-    import("@tauri-apps/api/window"),
-  ]);
-  const currentLabel = getCurrentWindow().label;
-  if (currentLabel !== "widget" && currentLabel !== "tray-panel") return;
-  const targetLabel = currentLabel === "widget" ? "tray-panel" : "widget";
-  await emitTo(targetLabel, "snapshots-updated", values);
+export async function requestQuotaRefresh(): Promise<QuotaState> {
+  if (!isTauri()) return { snapshots: [mockSnapshot], revision: 1, refreshing: false, failureCount: 0 };
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<QuotaState>("request_quota_refresh");
 }
 
 export async function getPreferences(): Promise<WidgetPreferences> {
@@ -130,6 +144,12 @@ export async function showFloatingWidget(): Promise<void> {
   if (!isTauri()) return;
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("show_floating_widget");
+}
+
+export async function getFloatingWidgetVisible(): Promise<boolean> {
+  if (!isTauri()) return true;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<boolean>("get_floating_widget_visible");
 }
 
 export async function toggleFloatingWidget(): Promise<boolean> {
@@ -258,7 +278,7 @@ export async function finishScreenshot(dataUrl: string, targetPath: string | nul
 }
 
 export async function getDefaultScreenshotFolder(): Promise<string> {
-  if (!isTauri()) return "Token Bubble\\截图";
+  if (!isTauri()) return "Token Bubble\\Screenshots";
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string>("get_default_screenshot_folder");
 }
@@ -266,14 +286,14 @@ export async function getDefaultScreenshotFolder(): Promise<string> {
 export async function chooseScreenshotFolder(): Promise<string | null> {
   if (!isTauri()) return null;
   const { open } = await import("@tauri-apps/plugin-dialog");
-  const value = await open({ directory: true, multiple: false, title: "选择截图保存文件夹" });
+  const value = await open({ directory: true, multiple: false, title: "Choose screenshot folder" });
   return typeof value === "string" ? value : null;
 }
 
 export async function chooseScreenshotFile(defaultPath: string): Promise<string | null> {
   if (!isTauri()) return null;
   const { save } = await import("@tauri-apps/plugin-dialog");
-  return save({ defaultPath, title: "保存截图", filters: [{ name: "PNG 图片", extensions: ["png"] }] });
+  return save({ defaultPath, title: "淇濆瓨鎴浘", filters: [{ name: "PNG 鍥剧墖", extensions: ["png"] }] });
 }
 
 export async function openScreenshotFolder(path: string): Promise<void> {
@@ -283,7 +303,7 @@ export async function openScreenshotFolder(path: string): Promise<void> {
 }
 
 export async function getPinnedScreenshot(id: string): Promise<ScreenshotCapturePayload> {
-  if (!isTauri()) throw new Error("贴图仅在桌面应用中可用");
+  if (!isTauri()) throw new Error("Screenshot not available before app initialization.");
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<ScreenshotCapturePayload>("get_pinned_screenshot", { id });
 }
@@ -349,17 +369,28 @@ export function setWidgetExpanded(expanded: boolean): Promise<void> {
 
 export async function listenDesktopEvents(handlers: {
   onPreferences: (value: WidgetPreferences) => void;
-  onRefresh: () => void;
   onUpdate: () => void;
-  onSnapshots?: (value: ProviderSnapshot[]) => void;
+  onQuotaState: (value: QuotaState) => void;
   onVoice?: (value: VoiceEvent) => void;
 }): Promise<() => void> {
   if (!isTauri()) return () => undefined;
   const { listen } = await import("@tauri-apps/api/event");
-  const unlistenPreferences = await listen<WidgetPreferences>("preferences-changed", (event) => handlers.onPreferences(event.payload));
-  const unlistenRefresh = await listen("refresh-requested", handlers.onRefresh);
-  const unlistenUpdate = await listen("update-check-requested", handlers.onUpdate);
-  const unlistenSnapshots = handlers.onSnapshots ? await listen<ProviderSnapshot[]>("snapshots-updated", (event) => handlers.onSnapshots?.(event.payload)) : () => undefined;
-  const unlistenVoice = handlers.onVoice ? await listen<VoiceEvent>("voice-event", (event) => handlers.onVoice?.(event.payload)) : () => undefined;
-  return () => { unlistenPreferences(); unlistenRefresh(); unlistenUpdate(); unlistenSnapshots(); unlistenVoice(); };
+  const unlisteners: Array<() => void> = [];
+  const cleanupAll = () => {
+    for (const unlisten of unlisteners.splice(0).reverse()) {
+      try { unlisten(); } catch { /* Continue releasing the remaining listeners. */ }
+    }
+  };
+  try {
+    unlisteners.push(await listen<WidgetPreferences>("preferences-changed", (event) => handlers.onPreferences(event.payload)));
+    unlisteners.push(await listen("update-check-requested", handlers.onUpdate));
+    unlisteners.push(await listen<QuotaState>("quota-state-changed", (event) => handlers.onQuotaState(event.payload)));
+    if (handlers.onVoice) {
+      unlisteners.push(await listen<VoiceEvent>("voice-event", (event) => handlers.onVoice?.(event.payload)));
+    }
+  } catch (error) {
+    cleanupAll();
+    throw error;
+  }
+  return cleanupAll;
 }

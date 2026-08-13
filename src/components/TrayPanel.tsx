@@ -21,7 +21,7 @@ import { getUsageCalendar, recordTokenUsage, recordUsage, tokenHeatLevel, visibl
 import { getTodayUsagePercent, recordDailyUsage } from "../lib/dailyUsage";
 import { clampPercent } from "../lib/format";
 import { normalizeLanguage } from "../lib/i18n";
-import { finishPanelResize, getVoiceInputDevices, startPanelResize, type PanelResizeDirection } from "../lib/bridge";
+import { finishPanelResize, getFloatingWidgetVisible, getVoiceInputDevices, startPanelResize, type PanelResizeDirection } from "../lib/bridge";
 import { FIXED_BUBBLE_PANEL_ACCENT, hexToRgb, hsvToRgb, isDarkPanelColor, panelAccentColor, rgbToHex, rgbToHsv } from "../lib/skin";
 import { formatEstimatedCost, nextCostCurrency, type CostCurrency } from "../lib/currency";
 import { nextUsageRange, selectUsageRange, type UsageRange } from "../lib/usageRange";
@@ -33,6 +33,7 @@ import { ScreenshotSettingsDialog } from "./ScreenshotSettingsDialog";
 interface Props {
   snapshot: ProviderSnapshot;
   preferences: WidgetPreferences;
+  operationError: string | null;
   onRefresh: () => void;
   onToggleWidget: () => Promise<boolean>;
   onTogglePositionLock: () => Promise<void>;
@@ -41,7 +42,7 @@ interface Props {
   onSkinChange: (widgetStyle: WidgetStyle) => Promise<void>;
   voiceEvent: VoiceEvent;
   voiceRevision: number;
-  onVoicePreferencesChange: (enabled: boolean, shortcut: string, inputDevice: string | null, sensitivity: number) => void;
+  onVoicePreferencesChange: (enabled: boolean, shortcut: string, inputDevice: string | null, sensitivity: number, endpointSeconds: number, punctuationEnabled: boolean) => void;
   onScreenshotPreferencesChange: (shortcut: string, folder: string) => void;
 }
 
@@ -92,6 +93,7 @@ function heatLevel(value: number | null, tokens: number | null, tokenReference: 
 export const TrayPanel = memo(function TrayPanel({
   snapshot,
   preferences,
+  operationError,
   onRefresh,
   onToggleWidget,
   onTogglePositionLock,
@@ -121,6 +123,7 @@ export const TrayPanel = memo(function TrayPanel({
   const [voiceInputDevices, setVoiceInputDevices] = useState<string[]>([]);
   const [voiceDevicesLoading, setVoiceDevicesLoading] = useState(false);
   const [draftVoiceSensitivity, setDraftVoiceSensitivity] = useState(preferences.voiceSensitivity);
+  const [draftVoiceEndpointSeconds, setDraftVoiceEndpointSeconds] = useState(preferences.voiceEndpointSeconds);
   const [renewalCalendarOpen, setRenewalCalendarOpen] = useState(false);
   const [draftMembershipExpiry, setDraftMembershipExpiry] = useState("");
   const [panelColorDialogOpen, setPanelColorDialogOpen] = useState(false);
@@ -171,6 +174,21 @@ export const TrayPanel = memo(function TrayPanel({
   const heatReferenceTokens = visibleTokenPeak(history);
   const totalTokenCount = history.reduce((sum, day) => sum + (day.tokens ?? 0), 0);
   const voiceHistory = useMemo(() => getVoiceCalendar(), [voiceRevision]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getFloatingWidgetVisible()
+      .then((visible) => {
+        if (!cancelled) setWidgetVisible(visible);
+      })
+      .catch(() => {
+        if (!cancelled) setWidgetVisible(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const todayVoiceCharacters = voiceHistory.at(-1)?.characters ?? 0;
   const totalVoiceCharacters = voiceHistory.reduce((sum, day) => sum + day.characters, 0);
   const voicePeak = Math.max(1, ...voiceHistory.map((day) => day.characters));
@@ -194,7 +212,7 @@ export const TrayPanel = memo(function TrayPanel({
     const key = event.key === " " ? "Space" : event.key.length === 1 ? event.key.toUpperCase() : event.key;
     const parts = [event.ctrlKey && "Ctrl", event.altKey && "Alt", event.shiftKey && "Shift", event.metaKey && "Meta", key].filter(Boolean);
     if (parts.length < 2) return;
-    onVoicePreferencesChange(preferences.voiceEnabled, parts.join("+"), preferences.voiceInputDevice, preferences.voiceSensitivity);
+    onVoicePreferencesChange(preferences.voiceEnabled, parts.join("+"), preferences.voiceInputDevice, preferences.voiceSensitivity, preferences.voiceEndpointSeconds, preferences.voicePunctuationEnabled);
     setCapturingShortcut(false);
   };
 
@@ -202,7 +220,15 @@ export const TrayPanel = memo(function TrayPanel({
     const next = Math.min(100, Math.max(0, Math.round(value)));
     setDraftVoiceSensitivity(next);
     if (next !== preferences.voiceSensitivity) {
-      onVoicePreferencesChange(preferences.voiceEnabled, preferences.voiceShortcut, preferences.voiceInputDevice, next);
+      onVoicePreferencesChange(preferences.voiceEnabled, preferences.voiceShortcut, preferences.voiceInputDevice, next, preferences.voiceEndpointSeconds, preferences.voicePunctuationEnabled);
+    }
+  };
+
+  const saveVoiceEndpointSeconds = (value: number) => {
+    const next = Math.min(8, Math.max(1, Math.round(value * 2) / 2));
+    setDraftVoiceEndpointSeconds(next);
+    if (next !== preferences.voiceEndpointSeconds) {
+      onVoicePreferencesChange(preferences.voiceEnabled, preferences.voiceShortcut, preferences.voiceInputDevice, preferences.voiceSensitivity, next, preferences.voicePunctuationEnabled);
     }
   };
 
@@ -254,8 +280,11 @@ export const TrayPanel = memo(function TrayPanel({
   }, [capturingShortcut]);
 
   useEffect(() => {
-    if (!shortcutSettingsOpen) setDraftVoiceSensitivity(preferences.voiceSensitivity);
-  }, [preferences.voiceSensitivity, shortcutSettingsOpen]);
+    if (!shortcutSettingsOpen) {
+      setDraftVoiceSensitivity(preferences.voiceSensitivity);
+      setDraftVoiceEndpointSeconds(preferences.voiceEndpointSeconds);
+    }
+  }, [preferences.voiceEndpointSeconds, preferences.voiceSensitivity, shortcutSettingsOpen]);
 
   useEffect(() => {
     if (!shortcutSettingsOpen) return;
@@ -678,7 +707,7 @@ export const TrayPanel = memo(function TrayPanel({
       </section>
 
       <section className="voice-strip tray-surface" aria-label={zh ? "语音输入" : "Voice input"}>
-        <button type="button" className={`voice-strip__toggle${preferences.voiceEnabled ? " is-active" : ""}`} onClick={() => onVoicePreferencesChange(!preferences.voiceEnabled, preferences.voiceShortcut, preferences.voiceInputDevice, preferences.voiceSensitivity)} aria-pressed={preferences.voiceEnabled} title={zh ? "开启后持续聆听；再次点击关闭" : "Listen continuously until turned off"}>
+        <button type="button" className={`voice-strip__toggle${preferences.voiceEnabled ? " is-active" : ""}`} onClick={() => onVoicePreferencesChange(!preferences.voiceEnabled, preferences.voiceShortcut, preferences.voiceInputDevice, preferences.voiceSensitivity, preferences.voiceEndpointSeconds, preferences.voicePunctuationEnabled)} aria-pressed={preferences.voiceEnabled} title={zh ? "开启后持续聆听；再次点击关闭" : "Listen continuously until turned off"}>
           <Microphone weight={preferences.voiceEnabled ? "fill" : "duotone"} />
         </button>
         <div className="voice-strip__count">
@@ -688,7 +717,7 @@ export const TrayPanel = memo(function TrayPanel({
           <span>{zh ? "语音模式" : "Voice mode"}</span>
           <strong title={voiceStatusLabel}>{voiceStatusLabel}</strong>
         </div>
-        <button type="button" className="voice-strip__settings" onClick={() => { setDraftVoiceSensitivity(preferences.voiceSensitivity); setShortcutSettingsOpen(true); setCapturingShortcut(false); }} aria-expanded={shortcutSettingsOpen} aria-label={zh ? "设置语音输入" : "Set voice input"} title={zh ? "设置快捷键、设备和灵敏度" : "Set shortcut, device, and sensitivity"}>
+        <button type="button" className="voice-strip__settings" onClick={() => { setDraftVoiceSensitivity(preferences.voiceSensitivity); setDraftVoiceEndpointSeconds(preferences.voiceEndpointSeconds); setShortcutSettingsOpen(true); setCapturingShortcut(false); }} aria-expanded={shortcutSettingsOpen} aria-label={zh ? "设置语音输入" : "Set voice input"} title={zh ? "设置快捷键、设备、灵敏度和断句" : "Set shortcut, device, sensitivity, and endpoint"}>
           <GearSix weight="duotone" />
         </button>
       </section>
@@ -711,7 +740,7 @@ export const TrayPanel = memo(function TrayPanel({
               <span>{zh ? "语音输入设备" : "Voice input device"}</span>
               <select
                 value={preferences.voiceInputDevice ?? ""}
-                onChange={(event) => onVoicePreferencesChange(preferences.voiceEnabled, preferences.voiceShortcut, event.target.value || null, preferences.voiceSensitivity)}
+                onChange={(event) => onVoicePreferencesChange(preferences.voiceEnabled, preferences.voiceShortcut, event.target.value || null, preferences.voiceSensitivity, preferences.voiceEndpointSeconds, preferences.voicePunctuationEnabled)}
               >
                 <option value="">{voiceDevicesLoading ? (zh ? "正在读取设备…" : "Loading devices…") : (zh ? "跟随系统默认" : "Follow system default")}</option>
                 {preferences.voiceInputDevice && !voiceInputDevices.includes(preferences.voiceInputDevice) ? <option value={preferences.voiceInputDevice}>{preferences.voiceInputDevice}</option> : null}
@@ -733,12 +762,51 @@ export const TrayPanel = memo(function TrayPanel({
               />
               <small><span>{zh ? "低" : "Low"}</span><span>{zh ? "越高越容易被声音唤起" : "Higher reacts to quieter speech"}</span><span>{zh ? "高" : "High"}</span></small>
             </label>
+            <label className="voice-sensitivity voice-endpoint">
+              <span><b>{zh ? "连续静音提交等待" : "Continuous-silence submit wait"}</b><output>{draftVoiceEndpointSeconds.toFixed(draftVoiceEndpointSeconds % 1 ? 1 : 0)}s</output></span>
+              <input
+                type="range"
+                min="1"
+                max="8"
+                step="0.5"
+                value={draftVoiceEndpointSeconds}
+                onChange={(event) => setDraftVoiceEndpointSeconds(Number(event.target.value))}
+                onPointerUp={(event) => saveVoiceEndpointSeconds(Number(event.currentTarget.value))}
+                onKeyUp={(event) => saveVoiceEndpointSeconds(Number(event.currentTarget.value))}
+                aria-label={zh ? "连续静音后的文字提交等待时间" : "Continuous silence before submitting the segment"}
+              />
+              <small><span>1s</span><span>{zh ? "文字实时出现；静音达到此时间后确认本段" : "Text stays live; submit after continuous silence"}</span><span>8s</span></small>
+            </label>
+            <button
+              type="button"
+              className="voice-punctuation"
+              role="switch"
+              aria-checked={preferences.voicePunctuationEnabled}
+              onClick={() =>
+                onVoicePreferencesChange(
+                  preferences.voiceEnabled,
+                  preferences.voiceShortcut,
+                  preferences.voiceInputDevice,
+                  preferences.voiceSensitivity,
+                  preferences.voiceEndpointSeconds,
+                  !preferences.voicePunctuationEnabled
+                )
+              }
+            >
+              <span><b>{zh ? "自动标点" : "Automatic punctuation"}</b><small>{zh ? "关闭时，每次断句只添加一个空格" : "When off, append one space per segment"}</small></span>
+              <span
+                className={`voice-punctuation-toggle${preferences.voicePunctuationEnabled ? " is-on" : ""}`}
+                aria-hidden="true"
+              >
+                <span />
+              </span>
+            </button>
             <button ref={shortcutCaptureButton} type="button" className={`voice-shortcut-capture${capturingShortcut ? " is-capturing" : ""}`} onClick={() => setCapturingShortcut(true)} onKeyDown={capturingShortcut ? captureShortcut : undefined}>
               {capturingShortcut ? (zh ? "现在按下新的组合键…" : "Press the new shortcut…") : (zh ? "更改快捷键" : "Change shortcut")}
             </button>
             <p>{zh ? "快捷键只切换识别开关；开启后无需按住，文字会边说边出现。" : "The shortcut toggles recognition. Keep speaking after starting; text appears live."}</p>
             <footer>
-              <button type="button" onClick={() => { setDraftVoiceSensitivity(65); onVoicePreferencesChange(preferences.voiceEnabled, "Ctrl+Space", null, 65); setCapturingShortcut(false); }}>{zh ? "恢复默认" : "Reset"}</button>
+              <button type="button" onClick={() => { setDraftVoiceSensitivity(65); setDraftVoiceEndpointSeconds(3); onVoicePreferencesChange(preferences.voiceEnabled, "Ctrl+Space", null, 65, 3, false); setCapturingShortcut(false); }}>{zh ? "恢复默认" : "Reset"}</button>
               <button type="button" className="is-primary" onClick={() => { setShortcutSettingsOpen(false); setCapturingShortcut(false); }}>{zh ? "完成" : "Done"}</button>
             </footer>
           </section>
@@ -782,7 +850,17 @@ export const TrayPanel = memo(function TrayPanel({
           <button
             type="button"
             className={widgetVisible ? "is-active" : ""}
-            onClick={() => void onToggleWidget().then(setWidgetVisible)}
+            onClick={async () => {
+              try {
+                setWidgetVisible(await onToggleWidget());
+              } catch {
+                try {
+                  setWidgetVisible(await getFloatingWidgetVisible());
+                } catch {
+                  setWidgetVisible((current) => !current);
+                }
+              }
+            }}
             title={zh ? "显示或隐藏浮窗" : "Show or hide widget"}
             aria-label={zh ? "显示或隐藏浮窗" : "Show or hide widget"}
           >

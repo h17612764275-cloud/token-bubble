@@ -49,16 +49,17 @@ jobs:
           releaseBody: |
             ## What's new
 
-            - Adds fully local, real-time Chinese-English voice input with automatic punctuation.
-            - Adds a configurable toggle shortcut, microphone selection, and activation sensitivity.
-            - Adds listening, recognizing, and startup animations while preserving the Bubble material.
-            - Adds daily voice-character totals and a flippable 90-day voice-usage heatmap.
+            - Adds Windows-local region screenshots with move/resize selection and rectangle, ellipse, arrow, pen, mosaic, and text annotations.
+            - Adds PNG saving, clipboard copy, configurable screenshot shortcut/folder, and draggable always-on-top pinned captures.
+            - Keeps the last valid quota visible through transient failures, retries automatically, and synchronizes recovery between the widget and tray panel.
+            - Prevents delayed quota responses from overwriting newer state or corrupting the daily-usage baseline.
+            - Hardens screenshot privacy by clearing pinned pixels when a pin closes and reducing screenshot/pin windows to minimum capabilities.
 
-            ![Token Bubble local voice input](https://raw.githubusercontent.com/h17612764275-cloud/token-bubble/main/docs/images/token-bubble-voice-states.png)
+            ![Token Bubble v0.2.2 panel](https://raw.githubusercontent.com/h17612764275-cloud/token-bubble/main/docs/images/token-bubble-panel.png)
 
             ## Privacy
 
-            Speech recognition and punctuation run on-device. Microphone audio is not uploaded or saved.
+            Screenshot capture, annotation, clipboard copy, and pinned-image display stay on-device. Screen pixels are read only after the user starts a capture, and screenshots are never uploaded by Token Bubble.
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
