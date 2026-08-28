@@ -28,6 +28,7 @@ vi.mock("./lib/bridge", () => ({
   getQuotaState: boundary.getQuotaState,
   requestQuotaRefresh: boundary.requestQuotaRefresh,
   getPreferences: boundary.getPreferences,
+  getFloatingWidgetVisible: vi.fn(async () => true),
   listenDesktopEvents: boundary.listenDesktopEvents,
   listenWidgetMotion: vi.fn(async () => () => undefined),
   registerVoiceShortcut: vi.fn(async () => async () => undefined),

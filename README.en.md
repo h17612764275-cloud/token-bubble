@@ -9,8 +9,13 @@ Token Bubble is derived from **Quota Float** and integrates **CodexScope** for l
 ## Download
 
 - [Download the latest installer](https://github.com/h17612764275-cloud/token-bubble/releases/latest)
-- Current version: `v0.2.2`
+- Current version: `v0.2.3`
 - Windows users should download the `.exe` installer from the Release.
+
+## v0.2.3 fixes (2026-08-29)
+
+- **No shrink transition after a capture:** The Windows screenshot window disables system transitions, so finishing or canceling a capture no longer plays the visible shrink animation.
+- **Fresh tool state for every capture:** Reusing the screenshot window clears the previous arrow, pen, or other annotation choice, returning the next capture to selection movement.
 
 ## v0.2.2 updates (2026-08-11)
 

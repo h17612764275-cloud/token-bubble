@@ -88,6 +88,10 @@ fn window_is_visible(window: &WebviewWindow) -> bool {
 fn warm_screenshot_window(window: &WebviewWindow, capture: &ScreenCapture) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
+        use windows::Win32::Foundation::TRUE;
+        use windows::Win32::Graphics::Dwm::{
+            DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED,
+        };
         use windows::Win32::UI::WindowsAndMessaging::{
             GetAncestor, GetWindowLongPtrW, IsWindowVisible, SetWindowLongPtrW, SetWindowPos,
             GA_ROOT, GWL_EXSTYLE, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, WS_EX_NOACTIVATE,
@@ -97,6 +101,12 @@ fn warm_screenshot_window(window: &WebviewWindow, capture: &ScreenCapture) -> Re
         unsafe {
             let root = GetAncestor(child, GA_ROOT);
             let handle = if root.0.is_null() { child } else { root };
+            let _ = DwmSetWindowAttribute(
+                handle,
+                DWMWA_TRANSITIONS_FORCEDISABLED,
+                std::ptr::from_ref(&TRUE).cast::<std::ffi::c_void>(),
+                std::mem::size_of_val(&TRUE) as u32,
+            );
             let style = GetWindowLongPtrW(handle, GWL_EXSTYLE);
             SetWindowLongPtrW(
                 handle,

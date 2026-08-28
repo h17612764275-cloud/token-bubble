@@ -177,6 +177,7 @@ export function ScreenshotOverlay() {
       activated.current = false;
       setCapture(null);
       setSelection(null);
+      setActiveTool(null);
       setActions([]);
       setPreview(null);
       previewRef.current = null;

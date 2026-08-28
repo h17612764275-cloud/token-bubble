@@ -478,7 +478,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn panicking_fetch_finishes_as_unavailable_instead_of_hanging() {
+    async fn panicking_fetch_finishes_without_hanging_and_keeps_last_good_snapshot() {
         let coordinator = QuotaCoordinator::new();
         coordinator
             .refresh_with(|| async { vec![successful_snapshot()] })
@@ -495,7 +495,7 @@ mod tests {
 
         assert!(!terminal.refreshing);
         assert_eq!(terminal.failure_count, 1);
-        assert_eq!(terminal.snapshots[0].status, "stale");
+        assert_eq!(terminal.snapshots[0].status, "ok");
     }
 
     #[tokio::test]

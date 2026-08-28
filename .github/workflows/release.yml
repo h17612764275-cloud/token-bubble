@@ -45,17 +45,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
-          releaseName: Token Bubble v__VERSION__
+          releaseName: Token Bubble 余量浮窗 v__VERSION__
           releaseBody: |
             ## What's new
 
-            - Adds Windows-local region screenshots with move/resize selection and rectangle, ellipse, arrow, pen, mosaic, and text annotations.
-            - Adds PNG saving, clipboard copy, configurable screenshot shortcut/folder, and draggable always-on-top pinned captures.
-            - Keeps the last valid quota visible through transient failures, retries automatically, and synchronizes recovery between the widget and tray panel.
-            - Prevents delayed quota responses from overwriting newer state or corrupting the daily-usage baseline.
-            - Hardens screenshot privacy by clearing pinned pixels when a pin closes and reducing screenshot/pin windows to minimum capabilities.
+            - Removes the visible Windows screenshot-window shrink transition when a capture finishes or is canceled.
+            - Starts every new capture with no annotation tool selected, so a reused screenshot window returns to selection movement instead of remembering the previous arrow, pen, or other tool.
+            - Adds regression coverage for sequential captures in the reused screenshot window.
 
-            ![Token Bubble v0.2.2 panel](https://raw.githubusercontent.com/h17612764275-cloud/token-bubble/main/docs/images/token-bubble-panel.png)
+            ![Token Bubble panel](https://raw.githubusercontent.com/h17612764275-cloud/token-bubble/main/docs/images/token-bubble-panel.png)
 
             ## Privacy
 
