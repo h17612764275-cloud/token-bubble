@@ -25,7 +25,7 @@ jobs:
         include:
           - os: windows-latest
             artifact-name: token-bubble-windows-unsigned
-            build-command: npm run tauri -- build
+            build-command: npm run tauri -- build --bundles nsis
             artifact-path: src-tauri/target/release/bundle/**
           - os: macos-latest
             artifact-name: token-bubble-macos-universal-unsigned
