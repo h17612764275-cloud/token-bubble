@@ -6,7 +6,7 @@ use std::{
     process::Command,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Mutex,
+        Mutex, MutexGuard,
     },
     time::Duration,
 };
@@ -35,11 +35,29 @@ struct HiddenWindows {
 pub(crate) struct ScreenshotManager {
     capture: Mutex<Option<ScreenCapture>>,
     hidden_windows: Mutex<Option<HiddenWindows>>,
+    lifecycle_lock: Mutex<()>,
     active: AtomicBool,
+    revealed: AtomicBool,
     dialog_open: AtomicBool,
     session_id: AtomicU64,
     last_heartbeat_ms: AtomicU64,
     pins: Mutex<HashMap<String, ScreenCapture>>,
+}
+
+fn lock_current_session(
+    manager: &ScreenshotManager,
+    session_id: u64,
+) -> Result<MutexGuard<'_, ()>, String> {
+    let lifecycle = manager
+        .lifecycle_lock
+        .lock()
+        .map_err(|_| "截图会话状态不可用".to_string())?;
+    if manager.session_id.load(Ordering::Acquire) != session_id
+        || !manager.active.load(Ordering::Acquire)
+    {
+        return Err("截图会话已结束".to_string());
+    }
+    Ok(lifecycle)
 }
 
 fn now_millis() -> u64 {
@@ -56,6 +74,7 @@ pub(crate) struct CapturePayload {
     data_url: String,
     width: u32,
     height: u32,
+    session_id: u64,
 }
 
 #[derive(Serialize)]
@@ -88,14 +107,14 @@ fn window_is_visible(window: &WebviewWindow) -> bool {
 fn warm_screenshot_window(window: &WebviewWindow, capture: &ScreenCapture) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Foundation::TRUE;
+        use windows::Win32::Foundation::{COLORREF, TRUE};
         use windows::Win32::Graphics::Dwm::{
             DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED,
         };
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetAncestor, GetWindowLongPtrW, IsWindowVisible, SetWindowLongPtrW, SetWindowPos,
-            GA_ROOT, GWL_EXSTYLE, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, WS_EX_NOACTIVATE,
-            WS_EX_TRANSPARENT,
+            GetAncestor, GetWindowLongPtrW, IsWindowVisible, SetLayeredWindowAttributes,
+            SetWindowLongPtrW, SetWindowPos, GA_ROOT, GWL_EXSTYLE, HWND_TOPMOST, LWA_ALPHA,
+            SWP_NOACTIVATE, SWP_SHOWWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
         };
         let child = window.hwnd().map_err(|error| error.to_string())?;
         unsafe {
@@ -111,15 +130,23 @@ fn warm_screenshot_window(window: &WebviewWindow, capture: &ScreenCapture) -> Re
             SetWindowLongPtrW(
                 handle,
                 GWL_EXSTYLE,
-                style | WS_EX_TRANSPARENT.0 as isize | WS_EX_NOACTIVATE.0 as isize,
+                style
+                    | WS_EX_LAYERED.0 as isize
+                    | WS_EX_TRANSPARENT.0 as isize
+                    | WS_EX_NOACTIVATE.0 as isize,
             );
+            SetLayeredWindowAttributes(handle, COLORREF(0), 1, LWA_ALPHA)
+                .map_err(|error| error.to_string())?;
+            // Keep the WebView logically visible and painting at a visually imperceptible alpha.
+            // Alpha zero lets DWM suspend the child surface and reveal a stale background frame
+            // when the window becomes opaque again.
             SetWindowPos(
                 handle,
                 Some(HWND_TOPMOST),
-                capture.x + capture.width as i32 - 16,
-                capture.y + capture.height as i32 - 16,
-                160,
-                80,
+                capture.x,
+                capture.y,
+                capture.width as i32,
+                capture.height as i32,
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
             )
             .map_err(|error| error.to_string())?;
@@ -137,23 +164,16 @@ fn warm_screenshot_window(window: &WebviewWindow, capture: &ScreenCapture) -> Re
         .map_err(|error| error.to_string())
 }
 
-fn show_screenshot_window(window: &WebviewWindow, capture: &ScreenCapture) -> Result<(), String> {
+fn prepare_screenshot_window(window: &WebviewWindow, capture: &ScreenCapture) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetAncestor, GetWindowLongPtrW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-            GA_ROOT, GWL_EXSTYLE, HWND_TOPMOST, SWP_SHOWWINDOW, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
+            GetAncestor, SetWindowPos, GA_ROOT, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
         };
         let child = window.hwnd().map_err(|error| error.to_string())?;
         unsafe {
             let root = GetAncestor(child, GA_ROOT);
             let handle = if root.0.is_null() { child } else { root };
-            let style = GetWindowLongPtrW(handle, GWL_EXSTYLE);
-            SetWindowLongPtrW(
-                handle,
-                GWL_EXSTYLE,
-                style & !(WS_EX_TRANSPARENT.0 as isize | WS_EX_NOACTIVATE.0 as isize),
-            );
             SetWindowPos(
                 handle,
                 Some(HWND_TOPMOST),
@@ -161,10 +181,9 @@ fn show_screenshot_window(window: &WebviewWindow, capture: &ScreenCapture) -> Re
                 capture.y,
                 capture.width as i32,
                 capture.height as i32,
-                SWP_SHOWWINDOW,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
             )
             .map_err(|error| error.to_string())?;
-            let _ = SetForegroundWindow(handle);
         }
         return Ok(());
     }
@@ -177,6 +196,51 @@ fn show_screenshot_window(window: &WebviewWindow, capture: &ScreenCapture) -> Re
         .and_then(|_| window.show())
         .and_then(|_| window.set_focus())
         .map_err(|error| error.to_string())
+}
+
+fn reveal_screenshot_window(window: &WebviewWindow) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Foundation::COLORREF;
+        use windows::Win32::Graphics::Dwm::DwmFlush;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetAncestor, GetWindowLongPtrW, SetForegroundWindow, SetLayeredWindowAttributes,
+            SetWindowLongPtrW, SetWindowPos, GA_ROOT, GWL_EXSTYLE, HWND_TOPMOST, LWA_ALPHA,
+            SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, WS_EX_NOACTIVATE,
+            WS_EX_TRANSPARENT,
+        };
+        let child = window.hwnd().map_err(|error| error.to_string())?;
+        unsafe {
+            let root = GetAncestor(child, GA_ROOT);
+            let handle = if root.0.is_null() { child } else { root };
+            let _ = DwmFlush();
+            SetLayeredWindowAttributes(handle, COLORREF(0), 255, LWA_ALPHA)
+                .map_err(|error| error.to_string())?;
+            let style = GetWindowLongPtrW(handle, GWL_EXSTYLE);
+            SetWindowLongPtrW(
+                handle,
+                GWL_EXSTYLE,
+                style & !(WS_EX_TRANSPARENT.0 as isize | WS_EX_NOACTIVATE.0 as isize),
+            );
+            SetWindowPos(
+                handle,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            )
+            .map_err(|error| error.to_string())?;
+            let _ = SetForegroundWindow(handle);
+        }
+        return Ok(());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+        Ok(())
+    }
 }
 
 fn repair_screenshot_interactivity(window: &WebviewWindow) -> Result<(), String> {
@@ -266,9 +330,10 @@ fn set_native_visibility(window: &WebviewWindow, visible: bool) {
     }
 }
 
-fn emergency_cancel_screenshot(app: &AppHandle, manager: &ScreenshotManager) {
+fn emergency_cancel_screenshot_locked(app: &AppHandle, manager: &ScreenshotManager) {
     manager.session_id.fetch_add(1, Ordering::AcqRel);
     manager.active.store(false, Ordering::Release);
+    manager.revealed.store(false, Ordering::Release);
     manager.dialog_open.store(false, Ordering::Release);
     manager.last_heartbeat_ms.store(0, Ordering::Release);
     discard_capture(manager);
@@ -293,6 +358,80 @@ fn emergency_cancel_screenshot(app: &AppHandle, manager: &ScreenshotManager) {
     }
 }
 
+fn cancel_current_session_if(
+    app: &AppHandle,
+    manager: &ScreenshotManager,
+    session_id: u64,
+    predicate: impl FnOnce(&ScreenshotManager) -> bool,
+) -> bool {
+    let _lifecycle = manager
+        .lifecycle_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if manager.session_id.load(Ordering::Acquire) != session_id || !predicate(manager) {
+        return false;
+    }
+    emergency_cancel_screenshot_locked(app, manager);
+    true
+}
+
+fn should_cancel_unrevealed_session(manager: &ScreenshotManager, session_id: u64) -> bool {
+    manager.session_id.load(Ordering::Acquire) == session_id
+        && manager.active.load(Ordering::Acquire)
+        && !manager.revealed.load(Ordering::Acquire)
+}
+
+fn start_screenshot_reveal_watchdog(app: AppHandle, session_id: u64) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(2));
+        let manager = app.state::<ScreenshotManager>();
+        let _ = cancel_current_session_if(&app, &manager, session_id, |manager| {
+            should_cancel_unrevealed_session(manager, session_id)
+        });
+    });
+}
+
+fn cancel_timed_out_session(
+    app: &AppHandle,
+    manager: &ScreenshotManager,
+    session_id: u64,
+) -> bool {
+    cancel_current_session_if(app, manager, session_id, |manager| {
+        let active = manager.active.load(Ordering::Acquire);
+        let pending = manager
+            .capture
+            .lock()
+            .ok()
+            .is_some_and(|value| value.is_some());
+        if (!active && !pending) || manager.dialog_open.load(Ordering::Acquire) {
+            return false;
+        }
+        let last = manager.last_heartbeat_ms.load(Ordering::Acquire);
+        let timeout = if active { 4_500 } else { 8_000 };
+        last == 0 || now_millis().saturating_sub(last) > timeout
+    })
+}
+
+fn repair_current_screenshot_if_revealed(
+    app: &AppHandle,
+    manager: &ScreenshotManager,
+    session_id: u64,
+) -> bool {
+    let _lifecycle = manager
+        .lifecycle_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if manager.session_id.load(Ordering::Acquire) != session_id {
+        return false;
+    }
+    if manager.active.load(Ordering::Acquire) && manager.revealed.load(Ordering::Acquire) {
+        if let Some(window) = app.get_webview_window("screenshot") {
+            let _ = repair_screenshot_interactivity(&window);
+        }
+    }
+    true
+}
+
 fn start_screenshot_watchdog(app: AppHandle, session_id: u64) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
@@ -305,42 +444,13 @@ fn start_screenshot_watchdog(app: AppHandle, session_id: u64) {
         if !active && !pending {
             return;
         }
-        if active {
-            if let Some(window) = app.get_webview_window("screenshot") {
-                let _ = repair_screenshot_interactivity(&window);
-            }
+        if !repair_current_screenshot_if_revealed(&app, &manager, session_id) {
+            return;
         }
-        if manager.dialog_open.load(Ordering::Acquire) {
-            continue;
-        }
-        let last = manager.last_heartbeat_ms.load(Ordering::Acquire);
-        let timeout = if active { 4_500 } else { 8_000 };
-        if last == 0 || now_millis().saturating_sub(last) > timeout {
-            emergency_cancel_screenshot(&app, &manager);
+        if cancel_timed_out_session(&app, &manager, session_id) {
             return;
         }
     });
-}
-
-pub(crate) fn restore_windows(app: &AppHandle, manager: &ScreenshotManager) {
-    manager.active.store(false, Ordering::Release);
-    let visibility = manager
-        .hidden_windows
-        .lock()
-        .ok()
-        .and_then(|mut value| value.take());
-    let Some(visibility) = visibility else { return };
-    if visibility.widget {
-        if let Some(window) = app.get_webview_window("widget") {
-            let _ = window.show();
-        }
-    }
-    if visibility.panel {
-        if let Some(window) = app.get_webview_window("tray-panel") {
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
-    }
 }
 
 fn hide_preserved_windows(app: &AppHandle, manager: &ScreenshotManager) {
@@ -368,9 +478,13 @@ pub(crate) fn discard_capture(manager: &ScreenshotManager) {
 
 #[tauri::command]
 pub(crate) fn begin_screenshot(app: AppHandle, manager: State<'_, ScreenshotManager>) -> Result<(), String> {
+    let lifecycle = manager
+        .lifecycle_lock
+        .lock()
+        .map_err(|_| "截图会话状态不可用".to_string())?;
     let pending = manager.capture.lock().ok().is_some_and(|capture| capture.is_some());
     if manager.active.load(Ordering::Acquire) || pending {
-        cancel_screenshot(app, manager);
+        emergency_cancel_screenshot_locked(&app, &manager);
         return Ok(());
     }
 
@@ -383,44 +497,69 @@ pub(crate) fn begin_screenshot(app: AppHandle, manager: State<'_, ScreenshotMana
     }
     // Keep the widget visible during capture so its pixels remain in the screenshot. The live
     // window is hidden only after the full-screen overlay replaces it with those same pixels.
-    if let Some(window) = app.get_webview_window("tray-panel") { let _ = window.hide(); }
-    std::thread::sleep(Duration::from_millis(120));
+    if let Some(window) = app.get_webview_window("tray-panel") {
+        let _ = window.hide();
+    }
+    if visibility.panel {
+        std::thread::sleep(Duration::from_millis(120));
+    }
 
     let capture = match capture_current_monitor() {
         Ok(value) => value,
         Err(error) => {
-            restore_windows(&app, &manager);
+            emergency_cancel_screenshot_locked(&app, &manager);
             return Err(error);
         }
     };
+    let session_id = manager.session_id.fetch_add(1, Ordering::AcqRel) + 1;
     if let Ok(mut slot) = manager.capture.lock() {
         *slot = Some(capture.clone());
     }
-    let session_id = manager.session_id.fetch_add(1, Ordering::AcqRel) + 1;
+    manager.revealed.store(false, Ordering::Release);
     manager.dialog_open.store(false, Ordering::Release);
     manager.last_heartbeat_ms.store(now_millis(), Ordering::Release);
-    start_screenshot_watchdog(app.clone(), session_id);
-    let window = app
-        .get_webview_window("screenshot")
-        .ok_or_else(|| "截图窗口不存在".to_string())?;
+    let window = match app.get_webview_window("screenshot") {
+        Some(window) => window,
+        None => {
+            emergency_cancel_screenshot_locked(&app, &manager);
+            return Err("截图窗口不存在".to_string());
+        }
+    };
     if let Err(error) = warm_screenshot_window(&window, &capture) {
-        discard_capture(&manager);
-        restore_windows(&app, &manager);
+        emergency_cancel_screenshot_locked(&app, &manager);
         return Err(error);
     }
+    drop(lifecycle);
+    start_screenshot_watchdog(app.clone(), session_id);
     let emitter = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(160));
-        let _ = emitter.emit_to("screenshot", "screenshot-capture-ready", ());
+        // The image onLoad + two animation frames are the actual paint readiness gate. Keep a
+        // short native warm-up window without adding a perceptible fixed delay to every capture.
+        std::thread::sleep(Duration::from_millis(48));
+        let manager = emitter.state::<ScreenshotManager>();
+        let pending = manager.capture.lock().ok().is_some_and(|value| value.is_some());
+        if manager.session_id.load(Ordering::Acquire) == session_id && pending {
+            let _ = emitter.emit_to("screenshot", "screenshot-capture-ready", session_id);
+        }
     });
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn activate_screenshot(app: AppHandle, manager: State<'_, ScreenshotManager>) -> Result<(), String> {
+pub(crate) fn activate_screenshot(
+    app: AppHandle,
+    manager: State<'_, ScreenshotManager>,
+    session_id: u64,
+) -> Result<u64, String> {
+    let lifecycle = manager
+        .lifecycle_lock
+        .lock()
+        .map_err(|_| "截图会话状态不可用".to_string())?;
+    if manager.session_id.load(Ordering::Acquire) != session_id {
+        return Err("截图会话已结束".to_string());
+    }
     if manager.active.load(Ordering::Acquire) {
-        if let Some(window) = app.get_webview_window("screenshot") { let _ = window.set_focus(); }
-        return Ok(());
+        return Ok(session_id);
     }
     let capture = manager
         .capture
@@ -431,31 +570,76 @@ pub(crate) fn activate_screenshot(app: AppHandle, manager: State<'_, ScreenshotM
     let window = app
         .get_webview_window("screenshot")
         .ok_or_else(|| "截图窗口不存在".to_string())?;
-    if let Err(error) = show_screenshot_window(&window, &capture) {
-        let _ = window.hide();
-        discard_capture(&manager);
-        restore_windows(&app, &manager);
+    if let Err(error) = prepare_screenshot_window(&window, &capture) {
+        drop(lifecycle);
+        let _ = cancel_current_session_if(&app, &manager, session_id, |_| true);
+        return Err(error);
+    }
+    manager.last_heartbeat_ms.store(now_millis(), Ordering::Release);
+    manager.active.store(true, Ordering::Release);
+    drop(lifecycle);
+    start_screenshot_reveal_watchdog(app, session_id);
+    Ok(session_id)
+}
+
+#[tauri::command]
+pub(crate) fn reveal_screenshot(
+    app: AppHandle,
+    manager: State<'_, ScreenshotManager>,
+    session_id: u64,
+) -> Result<(), String> {
+    let lifecycle = manager
+        .lifecycle_lock
+        .lock()
+        .map_err(|_| "截图会话状态不可用".to_string())?;
+    if manager.session_id.load(Ordering::Acquire) != session_id
+        || !manager.active.load(Ordering::Acquire)
+    {
+        return Err("截图会话已结束".to_string());
+    }
+    let window = app
+        .get_webview_window("screenshot")
+        .ok_or_else(|| "截图窗口不存在".to_string())?;
+    if let Err(error) = reveal_screenshot_window(&window) {
+        drop(lifecycle);
+        let _ = cancel_current_session_if(&app, &manager, session_id, |_| true);
         return Err(error);
     }
     hide_preserved_windows(&app, &manager);
+    manager.revealed.store(true, Ordering::Release);
     manager.last_heartbeat_ms.store(now_millis(), Ordering::Release);
-    manager.active.store(true, Ordering::Release);
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn get_screenshot_capture(manager: State<'_, ScreenshotManager>) -> Result<CapturePayload, String> {
+pub(crate) fn get_screenshot_capture(
+    manager: State<'_, ScreenshotManager>,
+    expected_session_id: Option<u64>,
+) -> Result<CapturePayload, String> {
+    let session_id = manager.session_id.load(Ordering::Acquire);
+    if expected_session_id.is_some_and(|expected| expected != session_id) {
+        return Err("截图会话已结束".to_string());
+    }
     let capture = manager
         .capture
         .lock()
         .map_err(|_| "截图数据不可用".to_string())?
         .clone()
         .ok_or_else(|| "没有待处理的截图".to_string())?;
-    Ok(payload(&capture))
+    if manager.session_id.load(Ordering::Acquire) != session_id {
+        return Err("截图会话已结束".to_string());
+    }
+    Ok(payload(&capture, session_id))
 }
 
 #[tauri::command]
-pub(crate) fn screenshot_heartbeat(manager: State<'_, ScreenshotManager>) -> bool {
+pub(crate) fn screenshot_heartbeat(
+    manager: State<'_, ScreenshotManager>,
+    session_id: u64,
+) -> bool {
+    if manager.session_id.load(Ordering::Acquire) != session_id {
+        return false;
+    }
     let active = manager.active.load(Ordering::Acquire);
     let pending = manager.capture.lock().ok().is_some_and(|value| value.is_some());
     if active || pending {
@@ -470,28 +654,51 @@ pub(crate) fn screenshot_heartbeat(manager: State<'_, ScreenshotManager>) -> boo
 pub(crate) fn set_screenshot_dialog_mode(
     app: AppHandle,
     manager: State<'_, ScreenshotManager>,
+    session_id: u64,
     open: bool,
 ) -> Result<(), String> {
-    if !manager.active.load(Ordering::Acquire) {
-        return Ok(());
-    }
+    let _lifecycle = lock_current_session(&manager, session_id)?;
     let window = app
         .get_webview_window("screenshot")
         .ok_or_else(|| "截图窗口不存在".to_string())?;
-    manager.dialog_open.store(open, Ordering::Release);
+    if open {
+        manager.dialog_open.store(false, Ordering::Release);
+        set_screenshot_topmost(&window, false)?;
+        manager.dialog_open.store(true, Ordering::Release);
+    } else {
+        manager.dialog_open.store(false, Ordering::Release);
+        set_screenshot_topmost(&window, true)?;
+    }
     manager.last_heartbeat_ms.store(now_millis(), Ordering::Release);
-    set_screenshot_topmost(&window, !open)
+    Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn cancel_screenshot(app: AppHandle, manager: State<'_, ScreenshotManager>) {
-    manager.session_id.fetch_add(1, Ordering::AcqRel);
-    manager.active.store(false, Ordering::Release);
-    manager.dialog_open.store(false, Ordering::Release);
-    manager.last_heartbeat_ms.store(0, Ordering::Release);
-    if let Ok(mut capture) = manager.capture.lock() { *capture = None; }
-    if let Some(window) = app.get_webview_window("screenshot") { set_native_visibility(&window, false); }
-    restore_windows(&app, &manager);
+pub(crate) fn cancel_screenshot(
+    app: AppHandle,
+    manager: State<'_, ScreenshotManager>,
+    session_id: u64,
+) -> Result<(), String> {
+    let _lifecycle = lock_current_session(&manager, session_id)?;
+    emergency_cancel_screenshot_locked(&app, &manager);
+    Ok(())
+}
+
+pub(crate) fn force_cancel_screenshot(app: &AppHandle, manager: &ScreenshotManager) {
+    let _lifecycle = manager
+        .lifecycle_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let pending = manager
+        .capture
+        .lock()
+        .ok()
+        .is_some_and(|capture| capture.is_some());
+    if manager.active.load(Ordering::Acquire) || pending {
+        emergency_cancel_screenshot_locked(app, manager);
+    } else if let Some(window) = app.get_webview_window("screenshot") {
+        set_native_visibility(&window, false);
+    }
 }
 
 #[tauri::command]
@@ -523,6 +730,7 @@ pub(crate) fn finish_screenshot(
     app: AppHandle,
     manager: State<'_, ScreenshotManager>,
     state: State<'_, crate::AppState>,
+    session_id: u64,
     data_url: String,
     target_path: Option<String>,
     pin: bool,
@@ -530,6 +738,7 @@ pub(crate) fn finish_screenshot(
     let png = decode_png_data_url(&data_url)?;
     let image = image::load_from_memory_with_format(&png, ImageFormat::Png)
         .map_err(|_| "截图图片无效".to_string())?;
+    let _lifecycle = lock_current_session(&manager, session_id)?;
     let folder = state
         .preferences
         .lock()
@@ -558,13 +767,7 @@ pub(crate) fn finish_screenshot(
             y: 0,
         })?;
     }
-    if let Ok(mut capture) = manager.capture.lock() { *capture = None; }
-    manager.session_id.fetch_add(1, Ordering::AcqRel);
-    manager.active.store(false, Ordering::Release);
-    manager.dialog_open.store(false, Ordering::Release);
-    manager.last_heartbeat_ms.store(0, Ordering::Release);
-    if let Some(window) = app.get_webview_window("screenshot") { set_native_visibility(&window, false); }
-    restore_windows(&app, &manager);
+    emergency_cancel_screenshot_locked(&app, &manager);
     Ok(FinishPayload { saved_path: target.to_string_lossy().into_owned() })
 }
 
@@ -577,7 +780,7 @@ pub(crate) fn get_pinned_screenshot(id: String, manager: State<'_, ScreenshotMan
         .get(&id)
         .cloned()
         .ok_or_else(|| "贴图已经关闭".to_string())?;
-    Ok(payload(&capture))
+    Ok(payload(&capture, 0))
 }
 
 #[tauri::command]
@@ -601,11 +804,12 @@ pub(crate) fn close_pinned_screenshot(
     }
 }
 
-fn payload(capture: &ScreenCapture) -> CapturePayload {
+fn payload(capture: &ScreenCapture, session_id: u64) -> CapturePayload {
     CapturePayload {
         data_url: format!("data:image/png;base64,{}", BASE64.encode(&capture.png)),
         width: capture.width,
         height: capture.height,
+        session_id,
     }
 }
 
@@ -811,13 +1015,66 @@ fn copy_image_to_clipboard(_image: &DynamicImage) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_png_extension;
+    use super::{
+        ensure_png_extension, lock_current_session, should_cancel_unrevealed_session,
+        ScreenshotManager,
+    };
     use std::path::PathBuf;
+    use std::sync::atomic::Ordering;
+    use std::sync::{mpsc, Arc};
 
     #[test]
     fn save_targets_are_png_files() {
         assert_eq!(ensure_png_extension(PathBuf::from("capture")), PathBuf::from("capture.png"));
         assert_eq!(ensure_png_extension(PathBuf::from("capture.PNG")), PathBuf::from("capture.PNG"));
+    }
+
+    #[test]
+    fn unrevealed_active_session_is_cancelled_by_the_reveal_watchdog() {
+        let manager = ScreenshotManager::default();
+        manager.session_id.store(7, Ordering::Release);
+        manager.active.store(true, Ordering::Release);
+
+        assert!(should_cancel_unrevealed_session(&manager, 7));
+
+        manager.revealed.store(true, Ordering::Release);
+        assert!(!should_cancel_unrevealed_session(&manager, 7));
+
+        manager.revealed.store(false, Ordering::Release);
+        assert!(!should_cancel_unrevealed_session(&manager, 8));
+    }
+
+    #[test]
+    fn stale_callback_waiting_for_lifecycle_lock_cannot_end_new_session() {
+        let manager = Arc::new(ScreenshotManager::default());
+        manager.session_id.store(1, Ordering::Release);
+        manager.active.store(true, Ordering::Release);
+        let lifecycle = manager.lifecycle_lock.lock().unwrap();
+        let old_manager = Arc::clone(&manager);
+        let (started_tx, started_rx) = mpsc::channel();
+
+        let stale_callback = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            match lock_current_session(&old_manager, 1) {
+                Ok(_lifecycle) => {
+                    old_manager.active.store(false, Ordering::Release);
+                    None
+                }
+                Err(error) => Some(error),
+            }
+        });
+
+        started_rx.recv().unwrap();
+        manager.session_id.store(2, Ordering::Release);
+        manager.active.store(true, Ordering::Release);
+        drop(lifecycle);
+
+        assert_eq!(
+            stale_callback.join().unwrap(),
+            Some("截图会话已结束".to_string())
+        );
+        assert_eq!(manager.session_id.load(Ordering::Acquire), 2);
+        assert!(manager.active.load(Ordering::Acquire));
     }
 
     #[cfg(target_os = "windows")]

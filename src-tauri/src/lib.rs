@@ -1696,6 +1696,7 @@ pub fn run() {
             get_voice_input_devices,
             screenshot::begin_screenshot,
             screenshot::activate_screenshot,
+            screenshot::reveal_screenshot,
             screenshot::get_screenshot_capture,
             screenshot::screenshot_heartbeat,
             screenshot::set_screenshot_dialog_mode,
@@ -1716,10 +1717,8 @@ pub fn run() {
                 }
                 WindowEvent::CloseRequested { api, .. } if window.label() == "screenshot" => {
                     api.prevent_close();
-                    let _ = window.hide();
                     let manager = window.state::<screenshot::ScreenshotManager>();
-                    screenshot::discard_capture(&manager);
-                    screenshot::restore_windows(window.app_handle(), &manager);
+                    screenshot::force_cancel_screenshot(window.app_handle(), &manager);
                 }
                 WindowEvent::CloseRequested { api, .. } if window.label() == "pin" => {
                     api.prevent_close();

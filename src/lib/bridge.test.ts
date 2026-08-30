@@ -201,3 +201,40 @@ describe("pinned screenshots", () => {
     expect(api.invoke).toHaveBeenCalledWith("close_pinned_screenshot", { id: "pin" });
   });
 });
+
+describe("screenshot reveal", () => {
+  it("reveals only the native session returned by activation", async () => {
+    api.invoke.mockResolvedValueOnce(17).mockResolvedValueOnce(undefined);
+    const { activateScreenshot, revealScreenshot } = await import("./bridge");
+
+    const sessionId = await activateScreenshot(17);
+    await revealScreenshot(sessionId);
+
+    expect(api.invoke).toHaveBeenNthCalledWith(1, "activate_screenshot", { sessionId: 17 });
+    expect(api.invoke).toHaveBeenNthCalledWith(2, "reveal_screenshot", { sessionId: 17 });
+  });
+
+  it("binds dialog, finish, and cancel callbacks to their screenshot session", async () => {
+    const {
+      cancelScreenshot,
+      finishScreenshot,
+      setScreenshotDialogMode,
+    } = await import("./bridge");
+
+    await setScreenshotDialogMode(17, true);
+    await finishScreenshot(17, "data:image/png;base64,cGl4ZWxz", "C:\\Shots\\capture.png", true);
+    await cancelScreenshot(17);
+
+    expect(api.invoke).toHaveBeenNthCalledWith(1, "set_screenshot_dialog_mode", {
+      sessionId: 17,
+      open: true,
+    });
+    expect(api.invoke).toHaveBeenNthCalledWith(2, "finish_screenshot", {
+      sessionId: 17,
+      dataUrl: "data:image/png;base64,cGl4ZWxz",
+      targetPath: "C:\\Shots\\capture.png",
+      pin: true,
+    });
+    expect(api.invoke).toHaveBeenNthCalledWith(3, "cancel_screenshot", { sessionId: 17 });
+  });
+});

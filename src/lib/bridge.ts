@@ -213,6 +213,7 @@ export interface ScreenshotCapturePayload {
   dataUrl: string;
   width: number;
   height: number;
+  sessionId: number;
 }
 
 export async function beginScreenshot(): Promise<void> {
@@ -221,7 +222,7 @@ export async function beginScreenshot(): Promise<void> {
   await invoke("begin_screenshot");
 }
 
-export async function getScreenshotCapture(): Promise<ScreenshotCapturePayload> {
+export async function getScreenshotCapture(expectedSessionId?: number): Promise<ScreenshotCapturePayload> {
   if (!isTauri()) {
     const width = 1440;
     const height = 900;
@@ -241,40 +242,48 @@ export async function getScreenshotCapture(): Promise<ScreenshotCapturePayload> 
     glow.addColorStop(1, "rgba(26,34,80,0)");
     context.fillStyle = glow;
     context.fillRect(120, 40, 1000, 800);
-    return { dataUrl: canvas.toDataURL("image/png"), width, height };
+    return { dataUrl: canvas.toDataURL("image/png"), width, height, sessionId: 0 };
   }
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<ScreenshotCapturePayload>("get_screenshot_capture");
+  return invoke<ScreenshotCapturePayload>("get_screenshot_capture", {
+    expectedSessionId: expectedSessionId ?? null,
+  });
 }
 
-export async function activateScreenshot(): Promise<void> {
+export async function activateScreenshot(sessionId: number): Promise<number> {
+  if (!isTauri()) return 0;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<number>("activate_screenshot", { sessionId });
+}
+
+export async function revealScreenshot(sessionId: number): Promise<void> {
   if (!isTauri()) return;
   const { invoke } = await import("@tauri-apps/api/core");
-  await invoke("activate_screenshot");
+  await invoke("reveal_screenshot", { sessionId });
 }
 
-export async function heartbeatScreenshot(): Promise<boolean> {
+export async function heartbeatScreenshot(sessionId: number): Promise<boolean> {
   if (!isTauri()) return false;
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<boolean>("screenshot_heartbeat");
+  return invoke<boolean>("screenshot_heartbeat", { sessionId });
 }
 
-export async function setScreenshotDialogMode(open: boolean): Promise<void> {
+export async function setScreenshotDialogMode(sessionId: number, open: boolean): Promise<void> {
   if (!isTauri()) return;
   const { invoke } = await import("@tauri-apps/api/core");
-  await invoke("set_screenshot_dialog_mode", { open });
+  await invoke("set_screenshot_dialog_mode", { sessionId, open });
 }
 
-export async function cancelScreenshot(): Promise<void> {
+export async function cancelScreenshot(sessionId: number): Promise<void> {
   if (!isTauri()) return;
   const { invoke } = await import("@tauri-apps/api/core");
-  await invoke("cancel_screenshot");
+  await invoke("cancel_screenshot", { sessionId });
 }
 
-export async function finishScreenshot(dataUrl: string, targetPath: string | null, pin = false): Promise<{ savedPath: string }> {
+export async function finishScreenshot(sessionId: number, dataUrl: string, targetPath: string | null, pin = false): Promise<{ savedPath: string }> {
   if (!isTauri()) return { savedPath: "" };
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<{ savedPath: string }>("finish_screenshot", { dataUrl, targetPath, pin });
+  return invoke<{ savedPath: string }>("finish_screenshot", { sessionId, dataUrl, targetPath, pin });
 }
 
 export async function getDefaultScreenshotFolder(): Promise<string> {

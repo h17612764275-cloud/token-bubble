@@ -9,8 +9,14 @@ Token Bubble is derived from **Quota Float** and integrates **CodexScope** for l
 ## Download
 
 - [Download the latest installer](https://github.com/h17612764275-cloud/token-bubble/releases/latest)
-- Current version: `v0.2.3`
+- Current version: `v0.2.4`
 - Windows users should download the `.exe` installer from the Release.
+
+## v0.2.4 screenshot stability update (2026-08-30)
+
+- **No top-left flash or black frame when a capture starts:** The capture window warms up invisibly and without intercepting input, then appears only after its image is ready to paint.
+- **Faster capture startup:** The normal path removes unnecessary fixed waiting while keeping the paint-readiness checks that prevent flashing.
+- **Safer sequential captures:** Stale asynchronous work cannot overwrite a newer capture, and native reveal, cancel, and timeout recovery share one session lifecycle to prevent stuck overlays.
 
 ## v0.2.3 fixes (2026-08-29)
 

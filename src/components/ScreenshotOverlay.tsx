@@ -20,6 +20,7 @@ import {
   getPreferences,
   getScreenshotCapture,
   heartbeatScreenshot,
+  revealScreenshot,
   setScreenshotDialogMode,
   type ScreenshotCapturePayload,
 } from "../lib/bridge";
@@ -159,42 +160,54 @@ export function ScreenshotOverlay() {
   const annotationRef = useRef<HTMLCanvasElement>(null);
   const interaction = useRef<Interaction | null>(null);
   const previewRef = useRef<DrawingAction | null>(null);
-  const activated = useRef(false);
+  const currentSessionId = useRef<number | null>(null);
+  const activatedSessionId = useRef<number | null>(null);
 
   useEffect(() => {
     let disposed = false;
-    let loading = false;
+    let requestRevision = 0;
+    let latestSessionId = 0;
     let unlisten: () => void = () => undefined;
-    const requestCapture = (showError: boolean) => {
-      if (loading) return;
-      loading = true;
-      void getScreenshotCapture()
-        .then((value) => { if (!disposed) setCapture(value); })
-        .catch((value) => { if (!disposed && showError) setError(String(value)); })
-        .finally(() => { loading = false; });
+    const requestCapture = (showError: boolean, expectedSessionId?: number) => {
+      const revision = ++requestRevision;
+      void getScreenshotCapture(expectedSessionId)
+        .then((value) => {
+          if (disposed || revision !== requestRevision) return;
+          if (expectedSessionId !== undefined && value.sessionId !== expectedSessionId) return;
+          if (value.sessionId < latestSessionId) return;
+          latestSessionId = value.sessionId;
+          currentSessionId.current = value.sessionId;
+          activatedSessionId.current = null;
+          setCapture(value);
+        })
+        .catch((value) => {
+          if (!disposed && revision === requestRevision && showError) setError(String(value));
+        });
     };
-    const loadCapture = (showError = true) => {
-      activated.current = false;
+    const loadCapture = (sessionId: number, showError = true) => {
+      if (sessionId <= latestSessionId) return;
+      latestSessionId = sessionId;
+      currentSessionId.current = sessionId;
+      activatedSessionId.current = null;
       setCapture(null);
       setSelection(null);
       setActiveTool(null);
       setActions([]);
       setPreview(null);
+      interaction.current = null;
       previewRef.current = null;
+      setTextEditor(null);
+      setTextValue("");
+      setBusy(false);
       setError("");
-      requestCapture(showError);
+      requestCapture(showError, sessionId);
     };
     requestCapture(false);
-    void import("@tauri-apps/api/event").then(({ listen }) => listen("screenshot-capture-ready", () => loadCapture())).then((cleanup) => {
+    void import("@tauri-apps/api/event").then(({ listen }) => listen<number>("screenshot-capture-ready", (event) => loadCapture(event.payload))).then((cleanup) => {
       if (disposed) cleanup(); else unlisten = cleanup;
     });
-    const handleVisibility = () => {
-      if (document.visibilityState === "visible") loadCapture(false);
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       disposed = true;
-      document.removeEventListener("visibilitychange", handleVisibility);
       unlisten();
     };
   }, []);
@@ -225,7 +238,7 @@ export function ScreenshotOverlay() {
           setTextEditor(null);
           setTextValue("");
         } else {
-          void cancelScreenshot();
+          cancelCurrentScreenshot();
         }
       } else if (event.key === "Enter" && selection && !textEditor && !busy) {
         event.preventDefault();
@@ -239,17 +252,46 @@ export function ScreenshotOverlay() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   });
 
-  useEffect(() => {
-    if (!capture || activated.current) return;
-    activated.current = true;
-    void activateScreenshot().catch((value) => setError(String(value)));
-  }, [capture]);
+  const revealCapture = (sessionId: number) => {
+    if (currentSessionId.current !== sessionId) return;
+    setImageRevision((value) => value + 1);
+    if (activatedSessionId.current === sessionId) return;
+    activatedSessionId.current = sessionId;
+    const isCurrentSession = () => currentSessionId.current === sessionId && activatedSessionId.current === sessionId;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (!isCurrentSession()) return;
+        void activateScreenshot(sessionId)
+          .then((activeSessionId) => {
+            window.requestAnimationFrame(() => {
+              window.requestAnimationFrame(() => {
+                if (!isCurrentSession()) return;
+                void revealScreenshot(activeSessionId).catch((value) => {
+                  if (isCurrentSession()) setError(String(value));
+                });
+              });
+            });
+          })
+          .catch((value) => {
+            if (isCurrentSession()) setError(String(value));
+          });
+      });
+    });
+  };
+
+  const cancelCurrentScreenshot = () => {
+    const sessionId = currentSessionId.current;
+    if (sessionId === null) return;
+    void cancelScreenshot(sessionId).catch((value) => {
+      if (currentSessionId.current === sessionId) setError(String(value));
+    });
+  };
 
   useEffect(() => {
     if (!capture) return;
     let disposed = false;
     const heartbeat = () => {
-      void heartbeatScreenshot()
+      void heartbeatScreenshot(capture.sessionId)
         .then((alive) => { if (!alive && !disposed) setCapture(null); })
         .catch(() => undefined);
     };
@@ -375,7 +417,9 @@ export function ScreenshotOverlay() {
   };
 
   const complete = async (mode: "confirm" | "save-as" | "pin") => {
-    if (!selection || busy) return;
+    if (!selection || !capture || busy || currentSessionId.current !== capture.sessionId) return;
+    const sessionId = capture.sessionId;
+    const isCurrentSession = () => currentSessionId.current === sessionId;
     setBusy(true);
     setError("");
     try {
@@ -383,21 +427,31 @@ export function ScreenshotOverlay() {
       let targetPath: string | null = null;
       if (mode === "save-as") {
         const preferences = await getPreferences();
+        if (!isCurrentSession()) return;
         const separator = preferences.screenshotFolder.endsWith("\\") ? "" : "\\";
         const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
-        await setScreenshotDialogMode(true);
+        let dialogOpened = false;
         try {
+          await setScreenshotDialogMode(sessionId, true);
+          dialogOpened = true;
+          if (!isCurrentSession()) return;
           targetPath = await chooseScreenshotFile(`${preferences.screenshotFolder}${separator}Token-Bubble_${stamp}.png`);
         } finally {
-          await setScreenshotDialogMode(false);
+          if (dialogOpened) {
+            try {
+              await setScreenshotDialogMode(sessionId, false);
+            } catch (value) {
+              if (isCurrentSession()) throw value;
+            }
+          }
         }
-        if (!targetPath) return;
+        if (!isCurrentSession() || !targetPath) return;
       }
-      await finishScreenshot(dataUrl, targetPath, mode === "pin");
+      await finishScreenshot(sessionId, dataUrl, targetPath, mode === "pin");
     } catch (value) {
-      setError(String(value));
+      if (isCurrentSession()) setError(String(value));
     } finally {
-      setBusy(false);
+      if (isCurrentSession()) setBusy(false);
     }
   };
 
@@ -409,7 +463,7 @@ export function ScreenshotOverlay() {
 
   return (
     <main ref={rootRef} className="screenshot-overlay" onPointerDown={startSelection} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
-      {capture ? <img ref={imageRef} className="screenshot-capture" src={capture.dataUrl} draggable={false} alt="" onLoad={() => setImageRevision((value) => value + 1)} /> : null}
+      {capture ? <img ref={imageRef} className="screenshot-capture" src={capture.dataUrl} draggable={false} alt="" onLoad={() => revealCapture(capture.sessionId)} /> : null}
       {selection ? (
         <>
           <div className="screenshot-mask screenshot-mask--top" style={{ height: selection.y }} />
@@ -446,13 +500,13 @@ export function ScreenshotOverlay() {
               <button type="button" onClick={() => setActions((value) => value.slice(0, -1))} disabled={actions.length === 0} title="撤销" aria-label="撤销"><ArrowCounterClockwise /></button>
               <button type="button" className="is-save" onClick={() => void complete("save-as")} disabled={busy} title="另存为" aria-label="另存为"><DownloadSimple /></button>
               <button type="button" className="is-pin" onClick={() => void complete("pin")} disabled={busy} title="贴图置顶" aria-label="贴图置顶"><PushPin /></button>
-              <button type="button" className="is-cancel" onClick={() => void cancelScreenshot()} title="取消" aria-label="取消"><X /></button>
+              <button type="button" className="is-cancel" onClick={cancelCurrentScreenshot} title="取消" aria-label="取消"><X /></button>
               <button type="button" className="is-confirm" onClick={() => void complete("confirm")} disabled={busy} title="完成" aria-label="完成"><Check /></button>
             </nav>
           ) : null}
         </>
       ) : <div className="screenshot-mask screenshot-mask--full" />}
-      {error ? <div className="screenshot-error" role="alert">{error}<button type="button" onClick={() => void cancelScreenshot()}>关闭</button></div> : null}
+      {error ? <div className="screenshot-error" role="alert">{error}<button type="button" onClick={cancelCurrentScreenshot}>关闭</button></div> : null}
     </main>
   );
 }

@@ -37,6 +37,7 @@ jobs:
         shell: pwsh
         run: ./scripts/fetch-voice-models.ps1
       - run: npm test
+      - run: npm run build
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -49,9 +50,10 @@ jobs:
           releaseBody: |
             ## What's new
 
-            - Removes the visible Windows screenshot-window shrink transition when a capture finishes or is canceled.
-            - Starts every new capture with no annotation tool selected, so a reused screenshot window returns to selection movement instead of remembering the previous arrow, pen, or other tool.
-            - Adds regression coverage for sequential captures in the reused screenshot window.
+            - Prevents the top-left flash and full-screen black frame when Windows screenshot capture starts.
+            - Speeds up the normal capture path while preserving the invisible paint-readiness warm-up.
+            - Isolates sequential capture sessions so stale image loads, animation frames, cancel operations, and watchdogs cannot corrupt a newer capture.
+            - Keeps the v0.2.3 fixes for the finish/cancel shrink transition and remembered annotation tools.
 
             ![Token Bubble panel](https://raw.githubusercontent.com/h17612764275-cloud/token-bubble/main/docs/images/token-bubble-panel.png)
 
