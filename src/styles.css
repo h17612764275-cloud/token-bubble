@@ -1412,6 +1412,8 @@ button { font: inherit; }
 .screenshot-mask--full { inset: 0; }
 .screenshot-selection { position: absolute; z-index: 3; border: 2px solid; border-image: linear-gradient(96deg,#8eeaff 0%,#8bc6ff 28%,#bd9aff 64%,#ff9ed8 100%) 1; background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 0 8px rgba(129,222,255,.88), 0 0 18px rgba(177,141,255,.56), inset 0 0 7px rgba(255,255,255,.34); cursor: move; }
 .screenshot-selection.is-drawing { cursor: crosshair; }
+.screenshot-selection.is-annotation-hovered { cursor: url("./assets/annotation-move-cursor.svg") 16 16, move; }
+.screenshot-selection.is-moving-annotation { cursor: url("./assets/annotation-move-cursor.svg") 16 16, move; }
 .screenshot-selection canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .screenshot-handle { position: absolute; z-index: 5; width: 11px; height: 11px; padding: 0; border: 1px solid rgba(255,255,255,.96); border-radius: 50%; background: #fff; box-shadow: 0 0 5px #fff, 0 0 11px rgba(125,223,255,.95), 0 0 17px rgba(189,132,255,.72); transform: translate(-50%,-50%); }
 .screenshot-handle--nw { left: 0; top: 0; cursor: nw-resize; }

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">
+  <defs>
+    <linearGradient id="glass-gradient" x1="7" y1="6" x2="26" y2="27" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFB6D9"/>
+      <stop offset="0.5" stop-color="#DCA8FF"/>
+      <stop offset="1" stop-color="#AA98FF"/>
+    </linearGradient>
+    <filter id="soft-glow" x="-45%" y="-45%" width="190%" height="190%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="0.7" stdDeviation="0.8" flood-color="#D49CFF" flood-opacity="0.34"/>
+    </filter>
+  </defs>
+
+  <g stroke-linecap="round" stroke-linejoin="round" filter="url(#soft-glow)">
+    <path d="M16 6V26M6 16H26" stroke="#FFFFFF" stroke-opacity="0.78" stroke-width="3"/>
+    <path d="M12.8 9.15L16 5.8L19.2 9.15M22.85 12.8L26.2 16L22.85 19.2M19.2 22.85L16 26.2L12.8 22.85M9.15 19.2L5.8 16L9.15 12.8" stroke="#FFFFFF" stroke-opacity="0.78" stroke-width="3"/>
+
+    <path d="M16 6V26M6 16H26" stroke="url(#glass-gradient)" stroke-width="1.15"/>
+    <path d="M12.8 9.15L16 5.8L19.2 9.15M22.85 12.8L26.2 16L22.85 19.2M19.2 22.85L16 26.2L12.8 22.85M9.15 19.2L5.8 16L9.15 12.8" stroke="url(#glass-gradient)" stroke-width="1.15"/>
+  </g>
+
+  <circle cx="16" cy="16" r="3.15" fill="#FFFFFF" fill-opacity="0.3" stroke="#FFFFFF" stroke-opacity="0.82" stroke-width="0.8"/>
+  <circle cx="16" cy="16" r="2.5" stroke="url(#glass-gradient)" stroke-opacity="0.82" stroke-width="0.75"/>
+</svg>

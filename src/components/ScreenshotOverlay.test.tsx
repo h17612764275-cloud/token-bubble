@@ -56,6 +56,12 @@ function selectRegion(overlay: HTMLElement, pointerId: number) {
   });
 }
 
+function expectCustomMoveCursor(element: HTMLElement) {
+  expect(element.style.cursor).toContain("url(");
+  expect(element.style.cursor).toContain("16 16");
+  expect(element.style.cursor).toContain("move");
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   events.listeners.clear();
@@ -325,6 +331,349 @@ describe("ScreenshotOverlay", () => {
     });
 
     expect(screen.queryByRole("navigation", { name: "截图工具栏" })).toBeNull();
+  });
+
+  it("shows the custom move cursor over a completed annotation while its drawing tool stays active", async () => {
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    selectRegion(overlay, 31);
+
+    fireEvent.click(await screen.findByRole("button", { name: "矩形" }));
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 32,
+      clientX: 60,
+      clientY: 60,
+    });
+    fireEvent.pointerMove(overlay, {
+      buttons: 1,
+      pointerId: 32,
+      clientX: 120,
+      clientY: 100,
+    });
+    fireEvent.pointerUp(overlay, {
+      button: 0,
+      buttons: 0,
+      pointerId: 32,
+      clientX: 120,
+      clientY: 100,
+    });
+
+    fireEvent.pointerMove(selection!, {
+      buttons: 0,
+      pointerId: 33,
+      clientX: 60,
+      clientY: 80,
+    });
+
+    expectCustomMoveCursor(selection!);
+  });
+
+  it("drags a completed annotation instead of drawing another one", async () => {
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    selectRegion(overlay, 41);
+
+    fireEvent.click(await screen.findByRole("button", { name: "矩形" }));
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 42,
+      clientX: 60,
+      clientY: 60,
+    });
+    fireEvent.pointerMove(overlay, {
+      buttons: 1,
+      pointerId: 42,
+      clientX: 120,
+      clientY: 100,
+    });
+    fireEvent.pointerUp(overlay, {
+      button: 0,
+      buttons: 0,
+      pointerId: 42,
+      clientX: 120,
+      clientY: 100,
+    });
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 43,
+      clientX: 60,
+      clientY: 80,
+    });
+    expectCustomMoveCursor(selection!);
+    fireEvent.pointerMove(overlay, {
+      buttons: 1,
+      pointerId: 43,
+      clientX: 100,
+      clientY: 100,
+    });
+    fireEvent.pointerUp(overlay, {
+      button: 0,
+      buttons: 0,
+      pointerId: 43,
+      clientX: 100,
+      clientY: 100,
+    });
+
+    fireEvent.pointerMove(selection!, {
+      buttons: 0,
+      pointerId: 44,
+      clientX: 60,
+      clientY: 80,
+    });
+    expect(selection!.style.cursor).not.toContain("url(");
+
+    fireEvent.pointerMove(selection!, {
+      buttons: 0,
+      pointerId: 44,
+      clientX: 100,
+      clientY: 100,
+    });
+    expectCustomMoveCursor(selection!);
+  });
+
+  it("clears annotation hover state when undo removes the hovered annotation", async () => {
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    selectRegion(overlay, 51);
+
+    fireEvent.click(await screen.findByRole("button", { name: "矩形" }));
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 52,
+      clientX: 60,
+      clientY: 60,
+    });
+    fireEvent.pointerMove(overlay, {
+      buttons: 1,
+      pointerId: 52,
+      clientX: 120,
+      clientY: 100,
+    });
+    fireEvent.pointerUp(overlay, {
+      button: 0,
+      buttons: 0,
+      pointerId: 52,
+      clientX: 120,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(selection!, {
+      buttons: 0,
+      pointerId: 53,
+      clientX: 60,
+      clientY: 80,
+    });
+    expectCustomMoveCursor(selection!);
+
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+
+    expect(selection!.style.cursor).not.toContain("url(");
+  });
+
+  it("restores the annotation and clears drag state when the pointer interaction is cancelled", async () => {
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    selectRegion(overlay, 61);
+
+    fireEvent.click(await screen.findByRole("button", { name: "矩形" }));
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 62,
+      clientX: 60,
+      clientY: 60,
+    });
+    fireEvent.pointerMove(overlay, {
+      buttons: 1,
+      pointerId: 62,
+      clientX: 120,
+      clientY: 100,
+    });
+    fireEvent.pointerUp(overlay, {
+      button: 0,
+      buttons: 0,
+      pointerId: 62,
+      clientX: 120,
+      clientY: 100,
+    });
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 63,
+      clientX: 60,
+      clientY: 80,
+    });
+    expectCustomMoveCursor(selection!);
+    fireEvent.pointerMove(overlay, {
+      buttons: 1,
+      pointerId: 63,
+      clientX: 110,
+      clientY: 110,
+    });
+
+    fireEvent.pointerCancel(overlay, {
+      buttons: 0,
+      pointerId: 63,
+      clientX: 110,
+      clientY: 110,
+    });
+
+    expect(selection!.style.cursor).not.toContain("url(");
+
+    fireEvent.pointerMove(selection!, {
+      buttons: 0,
+      pointerId: 64,
+      clientX: 60,
+      clientY: 80,
+    });
+    expectCustomMoveCursor(selection!);
+
+    fireEvent.pointerMove(selection!, {
+      buttons: 0,
+      pointerId: 64,
+      clientX: 110,
+      clientY: 110,
+    });
+    expect(selection!.style.cursor).not.toContain("url(");
+  });
+
+  it("cancels an in-progress annotation move without undoing another annotation", async () => {
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    selectRegion(overlay, 65);
+
+    fireEvent.click(await screen.findByRole("button", { name: "矩形" }));
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+
+    fireEvent.pointerDown(selection!, { button: 0, buttons: 1, pointerId: 66, clientX: 60, clientY: 60 });
+    fireEvent.pointerMove(overlay, { buttons: 1, pointerId: 66, clientX: 120, clientY: 100 });
+    fireEvent.pointerUp(overlay, { button: 0, buttons: 0, pointerId: 66, clientX: 120, clientY: 100 });
+
+    fireEvent.pointerDown(selection!, { button: 0, buttons: 1, pointerId: 67, clientX: 180, clientY: 60 });
+    fireEvent.pointerMove(overlay, { buttons: 1, pointerId: 67, clientX: 210, clientY: 100 });
+    fireEvent.pointerUp(overlay, { button: 0, buttons: 0, pointerId: 67, clientX: 210, clientY: 100 });
+
+    fireEvent.pointerDown(selection!, { button: 0, buttons: 1, pointerId: 68, clientX: 60, clientY: 80 });
+    fireEvent.pointerMove(overlay, { buttons: 1, pointerId: 68, clientX: 110, clientY: 110 });
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    fireEvent.pointerUp(overlay, { button: 0, buttons: 0, pointerId: 68, clientX: 110, clientY: 110 });
+
+    fireEvent.pointerMove(selection!, { buttons: 0, pointerId: 69, clientX: 60, clientY: 80 });
+    expectCustomMoveCursor(selection!);
+
+    fireEvent.pointerMove(selection!, { buttons: 0, pointerId: 69, clientX: 180, clientY: 80 });
+    expectCustomMoveCursor(selection!);
+  });
+
+  it("undoes a completed annotation move without deleting a later annotation", async () => {
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    selectRegion(overlay, 75);
+
+    fireEvent.click(await screen.findByRole("button", { name: "矩形" }));
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+
+    fireEvent.pointerDown(selection!, { button: 0, buttons: 1, pointerId: 76, clientX: 60, clientY: 60 });
+    fireEvent.pointerMove(overlay, { buttons: 1, pointerId: 76, clientX: 120, clientY: 100 });
+    fireEvent.pointerUp(overlay, { button: 0, buttons: 0, pointerId: 76, clientX: 120, clientY: 100 });
+
+    fireEvent.pointerDown(selection!, { button: 0, buttons: 1, pointerId: 77, clientX: 180, clientY: 60 });
+    fireEvent.pointerMove(overlay, { buttons: 1, pointerId: 77, clientX: 210, clientY: 100 });
+    fireEvent.pointerUp(overlay, { button: 0, buttons: 0, pointerId: 77, clientX: 210, clientY: 100 });
+
+    fireEvent.pointerDown(selection!, { button: 0, buttons: 1, pointerId: 78, clientX: 60, clientY: 80 });
+    fireEvent.pointerMove(overlay, { buttons: 1, pointerId: 78, clientX: 110, clientY: 110 });
+    fireEvent.pointerUp(overlay, { button: 0, buttons: 0, pointerId: 78, clientX: 110, clientY: 110 });
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+
+    fireEvent.pointerMove(selection!, { buttons: 0, pointerId: 79, clientX: 60, clientY: 80 });
+    expectCustomMoveCursor(selection!);
+
+    fireEvent.pointerMove(selection!, { buttons: 0, pointerId: 79, clientX: 180, clientY: 80 });
+    expectCustomMoveCursor(selection!);
+
+    fireEvent.pointerMove(selection!, { buttons: 0, pointerId: 79, clientX: 110, clientY: 110 });
+    expect(selection!.style.cursor).not.toContain("url(");
+  });
+
+  it("does not open a new text editor after dragging an existing text annotation", async () => {
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    selectRegion(overlay, 71);
+
+    fireEvent.click(await screen.findByRole("button", { name: "文字" }));
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 72,
+      clientX: 60,
+      clientY: 60,
+    });
+    const editor = await screen.findByRole("textbox");
+    fireEvent.change(editor, { target: { value: "标注" } });
+    fireEvent.blur(editor);
+    expect(screen.queryByRole("textbox")).toBeNull();
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 73,
+      clientX: 65,
+      clientY: 70,
+    });
+    fireEvent.pointerMove(overlay, {
+      buttons: 1,
+      pointerId: 73,
+      clientX: 95,
+      clientY: 90,
+    });
+    fireEvent.pointerUp(overlay, {
+      button: 0,
+      buttons: 0,
+      pointerId: 73,
+      clientX: 95,
+      clientY: 90,
+    });
+    fireEvent.click(selection!, { clientX: 95, clientY: 90 });
+
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 
   it("resets the selected drawing tool for the next capture in the reused window", async () => {

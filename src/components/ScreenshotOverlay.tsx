@@ -12,6 +12,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import annotationMoveCursor from "../assets/annotation-move-cursor.svg";
 import {
   activateScreenshot,
   cancelScreenshot,
@@ -34,26 +35,26 @@ import {
   type ResizeHandle,
   type ScreenshotRect,
 } from "../lib/screenshot";
-
-type DrawingTool = "rectangle" | "ellipse" | "arrow" | "pen" | "mosaic" | "text";
-
-interface DrawingAction {
-  tool: DrawingTool;
-  start: Point;
-  end: Point;
-  points?: Point[];
-  text?: string;
-}
+import {
+  findDrawingActionAtPoint,
+  translateDrawingAction,
+  type DrawingAction,
+  type DrawingTool,
+} from "../lib/screenshotAnnotations";
 
 interface Interaction {
-  mode: "select" | "move" | "resize" | "draw";
+  mode: "select" | "move" | "resize" | "draw" | "move-action";
   origin: Point;
   initial: ScreenshotRect | null;
   handle?: ResizeHandle;
   tool?: DrawingTool;
+  actionIndex?: number;
+  initialAction?: DrawingAction;
+  didMove?: boolean;
 }
 
 const HANDLES: ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+const ANNOTATION_MOVE_CURSOR = `url("${annotationMoveCursor}") 16 16, move`;
 const TOOL_BUTTONS: Array<{ tool: DrawingTool; label: string; icon: typeof Rectangle }> = [
   { tool: "rectangle", label: "矩形", icon: Rectangle },
   { tool: "ellipse", label: "圆形", icon: Circle },
@@ -150,6 +151,8 @@ export function ScreenshotOverlay() {
   const [activeTool, setActiveTool] = useState<DrawingTool | null>(null);
   const [actions, setActions] = useState<DrawingAction[]>([]);
   const [preview, setPreview] = useState<DrawingAction | null>(null);
+  const [hoveredActionIndex, setHoveredActionIndex] = useState<number | null>(null);
+  const [draggingActionIndex, setDraggingActionIndex] = useState<number | null>(null);
   const [textEditor, setTextEditor] = useState<Point | null>(null);
   const [textValue, setTextValue] = useState("");
   const [imageRevision, setImageRevision] = useState(0);
@@ -160,6 +163,8 @@ export function ScreenshotOverlay() {
   const annotationRef = useRef<HTMLCanvasElement>(null);
   const interaction = useRef<Interaction | null>(null);
   const previewRef = useRef<DrawingAction | null>(null);
+  const actionHistory = useRef<DrawingAction[][]>([]);
+  const suppressSelectionClick = useRef(false);
   const currentSessionId = useRef<number | null>(null);
   const activatedSessionId = useRef<number | null>(null);
 
@@ -193,9 +198,13 @@ export function ScreenshotOverlay() {
       setSelection(null);
       setActiveTool(null);
       setActions([]);
+      actionHistory.current = [];
       setPreview(null);
+      setHoveredActionIndex(null);
+      setDraggingActionIndex(null);
       interaction.current = null;
       previewRef.current = null;
+      suppressSelectionClick.current = false;
       setTextEditor(null);
       setTextValue("");
       setBusy(false);
@@ -213,6 +222,23 @@ export function ScreenshotOverlay() {
   }, []);
 
   const bounds = { width: window.innerWidth, height: window.innerHeight };
+
+  const undoLastAction = () => {
+    const current = interaction.current;
+    if (current?.mode === "move-action" || current?.mode === "draw") interaction.current = null;
+    suppressSelectionClick.current = false;
+    setDraggingActionIndex(null);
+    setHoveredActionIndex(null);
+    if (current?.mode === "move-action" || current?.mode === "draw") {
+      const previous = actionHistory.current.pop();
+      if (previous) setActions(previous);
+      previewRef.current = null;
+      setPreview(null);
+      return;
+    }
+    const previous = actionHistory.current.pop();
+    setActions((value) => previous ?? value.slice(0, -1));
+  };
 
   useEffect(() => {
     const canvas = annotationRef.current;
@@ -245,7 +271,7 @@ export function ScreenshotOverlay() {
         void complete("confirm");
       } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
-        setActions((value) => value.slice(0, -1));
+        undoLastAction();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -308,8 +334,12 @@ export function ScreenshotOverlay() {
     interaction.current = { mode: "select", origin, initial: null };
     setSelection({ x: origin.x, y: origin.y, width: 0, height: 0 });
     setActions([]);
+    actionHistory.current = [];
     setPreview(null);
+    setHoveredActionIndex(null);
+    setDraggingActionIndex(null);
     previewRef.current = null;
+    suppressSelectionClick.current = false;
     setTextEditor(null);
     rootRef.current?.setPointerCapture(event.pointerId);
   };
@@ -318,6 +348,26 @@ export function ScreenshotOverlay() {
     if (event.button !== 0 || !selection || busy) return;
     event.stopPropagation();
     const origin = point(event);
+    const actionIndex = findDrawingActionAtPoint(actions, origin);
+    if (actionIndex !== null) {
+      event.preventDefault();
+      suppressSelectionClick.current = true;
+      actionHistory.current.push(actions);
+      interaction.current = {
+        mode: "move-action",
+        origin,
+        initial: selection,
+        actionIndex,
+        initialAction: actions[actionIndex],
+        didMove: false,
+      };
+      setHoveredActionIndex(actionIndex);
+      setDraggingActionIndex(actionIndex);
+      rootRef.current?.setPointerCapture(event.pointerId);
+      return;
+    }
+    suppressSelectionClick.current = false;
+    setHoveredActionIndex(null);
     if (activeTool === "text") {
       setTextEditor(origin);
       setTextValue("");
@@ -325,6 +375,7 @@ export function ScreenshotOverlay() {
     }
     if (activeTool) {
       const action: DrawingAction = { tool: activeTool, start: origin, end: origin, points: [origin] };
+      actionHistory.current.push(actions);
       interaction.current = { mode: "draw", origin, initial: selection, tool: activeTool };
       previewRef.current = action;
       setPreview(action);
@@ -335,6 +386,11 @@ export function ScreenshotOverlay() {
   };
 
   const openTextEditor = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (suppressSelectionClick.current) {
+      suppressSelectionClick.current = false;
+      event.stopPropagation();
+      return;
+    }
     if (activeTool !== "text" || busy || (event.target as HTMLElement).closest(".screenshot-text-editor")) return;
     event.stopPropagation();
     setTextEditor({ x: event.clientX, y: event.clientY });
@@ -345,20 +401,31 @@ export function ScreenshotOverlay() {
     if (event.button !== 0 || !selection || busy) return;
     event.preventDefault();
     event.stopPropagation();
+    setHoveredActionIndex(null);
     interaction.current = { mode: "resize", origin: point(event), initial: selection, handle };
     rootRef.current?.setPointerCapture(event.pointerId);
   };
 
   const move = (event: ReactPointerEvent<HTMLElement>) => {
     const current = interaction.current;
-    if (!current) return;
     const next = point(event);
+    if (!current) {
+      setHoveredActionIndex(selection && !busy && !textEditor
+        ? findDrawingActionAtPoint(actions, next)
+        : null);
+      return;
+    }
     if (current.mode === "select") {
       setSelection(clampSelection(normalizeSelection(current.origin, next), bounds));
     } else if (current.mode === "move" && current.initial) {
       setSelection(moveSelection(current.initial, { x: next.x - current.origin.x, y: next.y - current.origin.y }, bounds));
     } else if (current.mode === "resize" && current.initial && current.handle) {
       setSelection(resizeSelection(current.initial, current.handle, next, bounds));
+    } else if (current.mode === "move-action" && current.actionIndex !== undefined && current.initialAction) {
+      const delta = { x: next.x - current.origin.x, y: next.y - current.origin.y };
+      if (delta.x !== 0 || delta.y !== 0) current.didMove = true;
+      const moved = translateDrawingAction(current.initialAction, delta);
+      setActions((value) => value.map((action, index) => index === current.actionIndex ? moved : action));
     } else if (current.mode === "draw" && current.tool) {
       setPreview((value) => {
         const updated = value ? {
@@ -372,19 +439,39 @@ export function ScreenshotOverlay() {
     }
   };
 
-  const end = (event: ReactPointerEvent<HTMLElement>) => {
+  const end = (event: ReactPointerEvent<HTMLElement>, cancelled = false) => {
     const current = interaction.current;
     interaction.current = null;
     if (rootRef.current?.hasPointerCapture(event.pointerId)) rootRef.current.releasePointerCapture(event.pointerId);
+    if (current?.mode === "move-action") {
+      if (cancelled || !current.didMove) {
+        const previous = actionHistory.current.pop();
+        if (previous) setActions(previous);
+      }
+      setDraggingActionIndex(null);
+      setHoveredActionIndex(cancelled ? null : current.actionIndex ?? null);
+      if (cancelled) {
+        suppressSelectionClick.current = false;
+      } else {
+        window.setTimeout(() => { suppressSelectionClick.current = false; }, 0);
+      }
+    }
     const committed = previewRef.current;
-    if (current?.mode === "draw" && committed) setActions((value) => [...value, committed]);
+    if (current?.mode === "draw") {
+      if (cancelled || !committed) {
+        actionHistory.current.pop();
+      } else {
+        setActions((value) => [...value, committed]);
+      }
+    }
     previewRef.current = null;
     setPreview(null);
   };
 
   const commitText = () => {
     if (textEditor && textValue.trim()) {
-      setActions((value) => [...value, { tool: "text", start: textEditor, end: textEditor, text: textValue.trim() }]);
+      actionHistory.current.push(actions);
+      setActions([...actions, { tool: "text", start: textEditor, end: textEditor, text: textValue.trim() }]);
     }
     setTextEditor(null);
     setTextValue("");
@@ -462,7 +549,7 @@ export function ScreenshotOverlay() {
   } : null;
 
   return (
-    <main ref={rootRef} className="screenshot-overlay" onPointerDown={startSelection} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
+    <main ref={rootRef} className="screenshot-overlay" onPointerDown={startSelection} onPointerMove={move} onPointerUp={end} onPointerCancel={(event) => end(event, true)}>
       {capture ? <img ref={imageRef} className="screenshot-capture" src={capture.dataUrl} draggable={false} alt="" onLoad={() => revealCapture(capture.sessionId)} /> : null}
       {selection ? (
         <>
@@ -470,7 +557,18 @@ export function ScreenshotOverlay() {
           <div className="screenshot-mask screenshot-mask--left" style={{ top: selection.y, width: selection.x, height: selection.height }} />
           <div className="screenshot-mask screenshot-mask--right" style={{ top: selection.y, left: selection.x + selection.width, height: selection.height }} />
           <div className="screenshot-mask screenshot-mask--bottom" style={{ top: selection.y + selection.height }} />
-          <div className={`screenshot-selection${activeTool ? " is-drawing" : ""}`} style={{ left: selection.x, top: selection.y, width: selection.width, height: selection.height }} onPointerDown={startInside} onClick={openTextEditor}>
+          <div
+            className={`screenshot-selection${activeTool ? " is-drawing" : ""}${hoveredActionIndex !== null ? " is-annotation-hovered" : ""}${draggingActionIndex !== null ? " is-moving-annotation" : ""}`}
+            style={{
+              left: selection.x,
+              top: selection.y,
+              width: selection.width,
+              height: selection.height,
+              cursor: draggingActionIndex !== null || hoveredActionIndex !== null ? ANNOTATION_MOVE_CURSOR : undefined,
+            }}
+            onPointerDown={startInside}
+            onClick={openTextEditor}
+          >
             <canvas ref={annotationRef} />
             {HANDLES.map((handle) => <button key={handle} type="button" className={`screenshot-handle screenshot-handle--${handle}`} onPointerDown={(event) => startResize(event, handle)} aria-label={`调整 ${handle}`} />)}
             <output className="screenshot-size">{Math.round(selection.width * (capture?.width ?? window.innerWidth) / window.innerWidth)} × {Math.round(selection.height * (capture?.height ?? window.innerHeight) / window.innerHeight)}</output>
@@ -497,7 +595,7 @@ export function ScreenshotOverlay() {
                 <button key={tool} type="button" className={activeTool === tool ? "is-active" : ""} onClick={() => setActiveTool((value) => value === tool ? null : tool)} title={label} aria-label={label}><Icon /></button>
               ))}
               <i aria-hidden="true" />
-              <button type="button" onClick={() => setActions((value) => value.slice(0, -1))} disabled={actions.length === 0} title="撤销" aria-label="撤销"><ArrowCounterClockwise /></button>
+              <button type="button" onClick={undoLastAction} disabled={actions.length === 0} title="撤销" aria-label="撤销"><ArrowCounterClockwise /></button>
               <button type="button" className="is-save" onClick={() => void complete("save-as")} disabled={busy} title="另存为" aria-label="另存为"><DownloadSimple /></button>
               <button type="button" className="is-pin" onClick={() => void complete("pin")} disabled={busy} title="贴图置顶" aria-label="贴图置顶"><PushPin /></button>
               <button type="button" className="is-cancel" onClick={cancelCurrentScreenshot} title="取消" aria-label="取消"><X /></button>

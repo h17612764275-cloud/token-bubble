@@ -9,8 +9,14 @@ Token Bubble is derived from **Quota Float** and integrates **CodexScope** for l
 ## Download
 
 - [Download the latest installer](https://github.com/h17612764275-cloud/token-bubble/releases/latest)
-- Current version: `v0.2.4`
+- Current version: `v0.2.5`
 - Windows users should download the `.exe` installer from the Release.
+
+## v0.2.5 annotation editing and window visibility update (2026-09-01)
+
+- **Move existing annotations directly:** Hover and drag rectangles, ellipses, arrows, freehand strokes, mosaic regions, or text. Existing annotations keep hit priority even while a drawing tool remains selected, and cancelling or undoing a move restores its prior position without deleting another annotation.
+- **Custom movement cursor:** Annotation hover and drag states use a lightweight glass, pink-to-purple four-way cursor with a visually centered concentric core.
+- **Consistent hide behavior:** Choosing Hide now dismisses both the quota widget and tray panel, including repeated-click, focus-change, and asynchronous state races that could leave the panel visible or unclosable.
 
 ## v0.2.4 screenshot stability update (2026-08-30)
 

@@ -31,6 +31,8 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_window_state::Builder as WindowStateBuilder;
 use voice::VoiceManager;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 
 const DEFAULT_COLLAPSED_LOGICAL_SIZE: f64 = 68.0;
 const MIN_COLLAPSED_LOGICAL_SIZE: f64 = 52.0;
@@ -230,6 +232,94 @@ struct WidgetGeometryState {
     user_moved_expanded: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct WidgetVisibilityState {
+    user_wants_visible: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PanelFocusLossDecision {
+    Cancel,
+    WaitForDoubleClick,
+    Hide,
+}
+
+impl Default for WidgetVisibilityState {
+    fn default() -> Self {
+        Self {
+            user_wants_visible: true,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct WindowVisibilityCoordinator {
+    widget: Mutex<WidgetVisibilityState>,
+    panel_focus_loss_generation: AtomicU64,
+}
+
+impl Default for WindowVisibilityCoordinator {
+    fn default() -> Self {
+        Self {
+            widget: Mutex::new(WidgetVisibilityState::default()),
+            panel_focus_loss_generation: AtomicU64::new(0),
+        }
+    }
+}
+
+impl WindowVisibilityCoordinator {
+    fn with_user_widget_visibility<T>(
+        &self,
+        visible: bool,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        let mut state = self
+            .widget
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.user_wants_visible = visible;
+        operation()
+    }
+
+    fn with_external_widget_show<T>(&self, operation: impl FnOnce() -> T) -> Option<T> {
+        let state = self
+            .widget
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.user_wants_visible.then(operation)
+    }
+
+    fn begin_panel_focus_loss(&self) -> u64 {
+        self.panel_focus_loss_generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1)
+    }
+
+    fn supersede_panel_focus_loss(&self) {
+        self.panel_focus_loss_generation
+            .fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn panel_focus_loss_is_current(&self, generation: u64) -> bool {
+        self.panel_focus_loss_generation.load(Ordering::Acquire) == generation
+    }
+
+    fn panel_focus_loss_decision(
+        &self,
+        generation: u64,
+        panel_focused: bool,
+        widget_focused: bool,
+    ) -> PanelFocusLossDecision {
+        if !self.panel_focus_loss_is_current(generation) || panel_focused {
+            PanelFocusLossDecision::Cancel
+        } else if widget_focused {
+            PanelFocusLossDecision::WaitForDoubleClick
+        } else {
+            PanelFocusLossDecision::Hide
+        }
+    }
+}
+
 struct AppState {
     client: reqwest::Client,
     preferences: Mutex<WidgetPreferences>,
@@ -238,6 +328,7 @@ struct AppState {
     simulate_short_window_for_testing: Mutex<bool>,
     geometry: Mutex<Option<WidgetGeometryState>>,
     drag_mode: Mutex<Option<WidgetMode>>,
+    window_visibility: WindowVisibilityCoordinator,
     panel_resize_active: AtomicBool,
     panel_resize_generation: AtomicU64,
 }
@@ -273,6 +364,77 @@ fn end_panel_resize(app: AppHandle, state: State<'_, AppState>) {
         .fetch_add(1, Ordering::Relaxed)
         + 1;
     finish_panel_resize_after(app, generation, Duration::ZERO);
+}
+
+fn cursor_is_inside_window(window: &tauri::Window) -> bool {
+    window
+        .cursor_position()
+        .ok()
+        .zip(window.outer_position().ok())
+        .zip(window.outer_size().ok())
+        .is_some_and(|((cursor, position), size)| {
+            cursor.x >= position.x as f64
+                && cursor.x < (position.x + size.width as i32) as f64
+                && cursor.y >= position.y as f64
+                && cursor.y < (position.y + size.height as i32) as f64
+        })
+}
+
+fn widget_double_click_grace_period() -> Duration {
+    #[cfg(target_os = "windows")]
+    {
+        // Keep the panel alive through the user's configured double-click interval.
+        return Duration::from_millis(unsafe { GetDoubleClickTime() } as u64 + 50);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Duration::from_millis(550)
+    }
+}
+
+fn finish_panel_focus_loss_after(app: AppHandle, generation: u64, delay: Duration) {
+    std::thread::spawn(move || {
+        std::thread::sleep(delay);
+        let state = app.state::<AppState>();
+        if state.panel_resize_active.load(Ordering::Acquire) {
+            return;
+        }
+        let panel_focused = app
+            .get_webview_window("tray-panel")
+            .is_some_and(|panel| panel.is_focused().unwrap_or(false));
+        let widget_focused = app
+            .get_webview_window("widget")
+            .is_some_and(|widget| widget.is_focused().unwrap_or(false));
+        match state.window_visibility.panel_focus_loss_decision(
+            generation,
+            panel_focused,
+            widget_focused,
+        ) {
+            PanelFocusLossDecision::Cancel => return,
+            PanelFocusLossDecision::WaitForDoubleClick => {
+                std::thread::sleep(widget_double_click_grace_period());
+            }
+            PanelFocusLossDecision::Hide => {}
+        }
+
+        let state = app.state::<AppState>();
+        if state.panel_resize_active.load(Ordering::Acquire) {
+            return;
+        }
+        let panel_focused = app
+            .get_webview_window("tray-panel")
+            .is_some_and(|panel| panel.is_focused().unwrap_or(false));
+        if state.window_visibility.panel_focus_loss_decision(
+            generation,
+            panel_focused,
+            false,
+        ) == PanelFocusLossDecision::Hide
+        {
+            if let Some(panel) = app.get_webview_window("tray-panel") {
+                let _ = panel.hide();
+            }
+        }
+    });
 }
 
 async fn fetch_quota_snapshot(
@@ -829,6 +991,129 @@ mod geometry_tests {
     }
 }
 
+#[cfg(test)]
+mod window_visibility_tests {
+    use super::{PanelFocusLossDecision, WindowVisibilityCoordinator};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Barrier,
+    };
+
+    #[test]
+    fn concurrent_external_show_cannot_override_newer_user_hide() {
+        for _ in 0..256 {
+            let coordinator = Arc::new(WindowVisibilityCoordinator::default());
+            let widget_visible = Arc::new(AtomicBool::new(true));
+            let panel_visible = Arc::new(AtomicBool::new(true));
+            let start = Arc::new(Barrier::new(3));
+
+            let show_coordinator = Arc::clone(&coordinator);
+            let show_widget_visible = Arc::clone(&widget_visible);
+            let show_start = Arc::clone(&start);
+            let show = std::thread::spawn(move || {
+                show_start.wait();
+                show_coordinator.with_external_widget_show(|| {
+                    show_widget_visible.store(true, Ordering::Release);
+                });
+            });
+
+            let hide_coordinator = Arc::clone(&coordinator);
+            let hide_widget_visible = Arc::clone(&widget_visible);
+            let hide_panel_visible = Arc::clone(&panel_visible);
+            let hide_start = Arc::clone(&start);
+            let hide = std::thread::spawn(move || {
+                hide_start.wait();
+                hide_coordinator.with_user_widget_visibility(false, || {
+                    hide_panel_visible.store(false, Ordering::Release);
+                    hide_widget_visible.store(false, Ordering::Release);
+                });
+            });
+
+            start.wait();
+            show.join().unwrap();
+            hide.join().unwrap();
+            assert!(!widget_visible.load(Ordering::Acquire));
+            assert!(!panel_visible.load(Ordering::Acquire));
+        }
+    }
+
+    #[test]
+    fn blur_then_widget_toggle_ends_with_the_panel_hidden() {
+        let coordinator = WindowVisibilityCoordinator::default();
+        let panel_visible = AtomicBool::new(true);
+        let blur_generation = coordinator.begin_panel_focus_loss();
+
+        coordinator.supersede_panel_focus_loss();
+        panel_visible.store(false, Ordering::Release);
+        let stale_blur = coordinator.panel_focus_loss_decision(
+            blur_generation,
+            false,
+            false,
+        );
+
+        assert_eq!(stale_blur, PanelFocusLossDecision::Cancel);
+        assert!(!panel_visible.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn widget_toggle_then_blur_ends_with_the_panel_hidden() {
+        let coordinator = WindowVisibilityCoordinator::default();
+        let panel_visible = AtomicBool::new(true);
+
+        coordinator.supersede_panel_focus_loss();
+        panel_visible.store(false, Ordering::Release);
+        let blur_generation = coordinator.begin_panel_focus_loss();
+        let delayed_blur = coordinator.panel_focus_loss_decision(
+            blur_generation,
+            false,
+            true,
+        );
+
+        assert_eq!(delayed_blur, PanelFocusLossDecision::WaitForDoubleClick);
+        assert!(!panel_visible.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn a_single_widget_click_hides_the_panel_after_the_double_click_grace() {
+        let coordinator = WindowVisibilityCoordinator::default();
+        let panel_visible = AtomicBool::new(true);
+        let blur_generation = coordinator.begin_panel_focus_loss();
+
+        let during_grace = coordinator.panel_focus_loss_decision(
+            blur_generation,
+            false,
+            true,
+        );
+        assert_eq!(during_grace, PanelFocusLossDecision::WaitForDoubleClick);
+        assert!(panel_visible.load(Ordering::Acquire));
+
+        let after_grace = coordinator.panel_focus_loss_decision(
+            blur_generation,
+            false,
+            false,
+        );
+        assert_eq!(after_grace, PanelFocusLossDecision::Hide);
+        panel_visible.store(false, Ordering::Release);
+        assert!(!panel_visible.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn refocused_panel_cannot_be_hidden_by_an_older_blur() {
+        let coordinator = WindowVisibilityCoordinator::default();
+        let panel_visible = AtomicBool::new(true);
+        let blur_generation = coordinator.begin_panel_focus_loss();
+
+        let delayed_blur = coordinator.panel_focus_loss_decision(
+            blur_generation,
+            true,
+            false,
+        );
+
+        assert_eq!(delayed_blur, PanelFocusLossDecision::Cancel);
+        assert!(panel_visible.load(Ordering::Acquire));
+    }
+}
+
 #[tauri::command]
 fn collapse_widget(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let window = app
@@ -1183,13 +1468,53 @@ fn set_widget_always_on_top(
     Ok(next)
 }
 
+fn set_user_widget_visibility(
+    app: &AppHandle,
+    state: &AppState,
+    visible: bool,
+) -> Result<bool, String> {
+    state
+        .window_visibility
+        .with_user_widget_visibility(visible, || {
+            let widget = app
+                .get_webview_window("widget")
+                .ok_or_else(|| "widget window missing".to_string())?;
+            state.window_visibility.supersede_panel_focus_loss();
+            if visible {
+                widget.show().map_err(|error| error.to_string())?;
+                widget.set_focus().map_err(|error| error.to_string())?;
+                if !widget.is_visible().map_err(|error| error.to_string())? {
+                    return Err("widget remained hidden after show".to_string());
+                }
+                return Ok(true);
+            }
+
+            let panel_error = app
+                .get_webview_window("tray-panel")
+                .and_then(|panel| panel.hide().err())
+                .map(|error| error.to_string());
+            let widget_error = widget.hide().err().map(|error| error.to_string());
+            if let Some(error) = widget_error.or(panel_error) {
+                return Err(error);
+            }
+            if widget.is_visible().map_err(|error| error.to_string())? {
+                return Err("widget remained visible after hide".to_string());
+            }
+            if let Some(panel) = app.get_webview_window("tray-panel") {
+                if panel.is_visible().map_err(|error| error.to_string())? {
+                    return Err("panel remained visible after widget hide".to_string());
+                }
+            }
+            Ok(false)
+        })
+}
+
 #[tauri::command]
-fn show_floating_widget(app: AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window("widget")
-        .ok_or_else(|| "widget window missing".to_string())?;
-    window.show().map_err(|error| error.to_string())?;
-    window.set_focus().map_err(|error| error.to_string())
+fn show_floating_widget(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    set_user_widget_visibility(&app, &state, true).map(|_| ())
 }
 
 #[tauri::command]
@@ -1201,18 +1526,15 @@ fn get_floating_widget_visible(app: AppHandle) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn toggle_floating_widget(app: AppHandle) -> Result<bool, String> {
+fn toggle_floating_widget(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
     let window = app
         .get_webview_window("widget")
         .ok_or_else(|| "widget window missing".to_string())?;
     let visible = window.is_visible().map_err(|error| error.to_string())?;
-    if visible {
-        window.hide().map_err(|error| error.to_string())?;
-        Ok(false)
-    } else {
-        window.show().map_err(|error| error.to_string())?;
-        Ok(true)
-    }
+    set_user_widget_visibility(&app, &state, !visible)
 }
 
 #[tauri::command]
@@ -1291,7 +1613,11 @@ fn resize_floating_widget(
 }
 
 #[tauri::command]
-fn toggle_panel_from_widget(app: AppHandle) -> Result<bool, String> {
+fn toggle_panel_from_widget(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    state.window_visibility.supersede_panel_focus_loss();
     let widget = app
         .get_webview_window("widget")
         .ok_or_else(|| "widget window missing".to_string())?;
@@ -1457,14 +1783,8 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     builder
         .on_menu_event(move |app, event| match event.id.as_ref() {
             "show" => {
-                if let Some(window) = app.get_webview_window("widget") {
-                    if window.is_visible().unwrap_or(false) {
-                        let _ = window.hide();
-                    } else {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                }
+                let state = app.state::<AppState>();
+                let _ = toggle_floating_widget(app.clone(), state);
             }
             "refresh" => {
                 trigger_quota_refresh(app.clone());
@@ -1606,9 +1926,13 @@ pub fn run() {
             }
         })
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            if let Some(window) = app.get_webview_window("widget") {
-                let _ = window.show();
-                let _ = window.set_focus();
+            if let Some(state) = app.try_state::<AppState>() {
+                let _ = state.window_visibility.with_external_widget_show(|| {
+                    if let Some(window) = app.get_webview_window("widget") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                });
             }
         }))
         .plugin(tauri_plugin_autostart::init(
@@ -1642,6 +1966,7 @@ pub fn run() {
                 simulate_short_window_for_testing: Mutex::new(false),
                 geometry: Mutex::new(None),
                 drag_mode: Mutex::new(None),
+                window_visibility: WindowVisibilityCoordinator::default(),
                 panel_resize_active: AtomicBool::new(false),
                 panel_resize_generation: AtomicU64::new(0),
             });
@@ -1732,24 +2057,23 @@ pub fn run() {
                     screenshot::remove_pin(&manager, window.label());
                 }
                 WindowEvent::Focused(false) if window.label() == "tray-panel" => {
-                    let resizing = window
-                        .state::<AppState>()
-                        .panel_resize_active
-                        .load(Ordering::Acquire);
-                    let cursor_inside = window
-                        .cursor_position()
-                        .ok()
-                        .zip(window.outer_position().ok())
-                        .zip(window.outer_size().ok())
-                        .is_some_and(|((cursor, position), size)| {
-                            cursor.x >= position.x as f64
-                                && cursor.x < (position.x + size.width as i32) as f64
-                                && cursor.y >= position.y as f64
-                                && cursor.y < (position.y + size.height as i32) as f64
-                        });
-                    if !resizing && !cursor_inside {
-                        let _ = window.hide();
+                    let state = window.state::<AppState>();
+                    let resizing = state.panel_resize_active.load(Ordering::Acquire);
+                    let cursor_inside_panel = cursor_is_inside_window(window);
+                    if !resizing && !cursor_inside_panel {
+                        let generation = state.window_visibility.begin_panel_focus_loss();
+                        finish_panel_focus_loss_after(
+                            window.app_handle().clone(),
+                            generation,
+                            Duration::from_millis(80),
+                        );
                     }
+                }
+                WindowEvent::Focused(true) if window.label() == "tray-panel" => {
+                    window
+                        .state::<AppState>()
+                        .window_visibility
+                        .supersede_panel_focus_loss();
                 }
                 WindowEvent::Resized(_) if window.label() == "tray-panel" => {
                     let state = window.state::<AppState>();
