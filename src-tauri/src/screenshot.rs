@@ -16,6 +16,160 @@ use image::{DynamicImage, ImageFormat, RgbaImage};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowTarget {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DesktopRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+fn clip_window_targets(
+    monitor: DesktopRect,
+    candidates: impl IntoIterator<Item = DesktopRect>,
+) -> Vec<WindowTarget> {
+    candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let left = candidate.left.max(monitor.left);
+            let top = candidate.top.max(monitor.top);
+            let right = candidate.right.min(monitor.right);
+            let bottom = candidate.bottom.min(monitor.bottom);
+            if right <= left || bottom <= top {
+                return None;
+            }
+            Some(WindowTarget {
+                x: left - monitor.left,
+                y: top - monitor.top,
+                width: (right - left) as u32,
+                height: (bottom - top) as u32,
+            })
+        })
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn collect_window_targets(monitor: DesktopRect) -> Vec<WindowTarget> {
+    use std::{ffi::c_void, mem::size_of};
+    use windows::core::BOOL;
+    use windows::Win32::{
+        Foundation::{HWND, LPARAM, RECT, TRUE},
+        Graphics::Dwm::{
+            DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
+        },
+        UI::WindowsAndMessaging::{
+            EnumWindows, GetClassNameW, GetWindowLongPtrW, GetWindowRect,
+            GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE, WS_EX_TRANSPARENT,
+        },
+    };
+
+    struct Enumeration {
+        current_process_id: u32,
+        rects: Vec<DesktopRect>,
+    }
+
+    unsafe extern "system" fn visit_window(handle: HWND, state: LPARAM) -> BOOL {
+        let enumeration = unsafe { &mut *(state.0 as *mut Enumeration) };
+        if !unsafe { IsWindowVisible(handle) }.as_bool() || unsafe { IsIconic(handle) }.as_bool() {
+            return TRUE;
+        }
+
+        let mut process_id = 0_u32;
+        unsafe { GetWindowThreadProcessId(handle, Some(&mut process_id)) };
+        if process_id == enumeration.current_process_id {
+            return TRUE;
+        }
+
+        let extended_style = unsafe { GetWindowLongPtrW(handle, GWL_EXSTYLE) };
+        if extended_style & WS_EX_TRANSPARENT.0 as isize != 0 {
+            return TRUE;
+        }
+
+        let mut cloaked = 0_u32;
+        if unsafe {
+            DwmGetWindowAttribute(
+                handle,
+                DWMWA_CLOAKED,
+                (&mut cloaked as *mut u32).cast::<c_void>(),
+                size_of::<u32>() as u32,
+            )
+        }
+        .is_ok()
+            && cloaked != 0
+        {
+            return TRUE;
+        }
+
+        let mut class_name = [0_u16; 64];
+        let class_length = unsafe { GetClassNameW(handle, &mut class_name) };
+        if class_length > 0 {
+            let class_name = String::from_utf16_lossy(&class_name[..class_length as usize]);
+            if is_ignored_window_class(&class_name) {
+                return TRUE;
+            }
+        }
+
+        let mut bounds = RECT::default();
+        if unsafe {
+            DwmGetWindowAttribute(
+                handle,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                (&mut bounds as *mut RECT).cast::<c_void>(),
+                size_of::<RECT>() as u32,
+            )
+        }
+        .is_err()
+            && unsafe { GetWindowRect(handle, &mut bounds) }.is_err()
+        {
+            return TRUE;
+        }
+
+        enumeration.rects.push(DesktopRect {
+            left: bounds.left,
+            top: bounds.top,
+            right: bounds.right,
+            bottom: bounds.bottom,
+        });
+        TRUE
+    }
+
+    let mut enumeration = Enumeration {
+        current_process_id: std::process::id(),
+        rects: Vec::new(),
+    };
+    unsafe {
+        let _ = EnumWindows(
+            Some(visit_window),
+            LPARAM((&mut enumeration as *mut Enumeration) as isize),
+        );
+    }
+    clip_window_targets(monitor, enumeration.rects)
+}
+
+#[cfg(target_os = "windows")]
+fn is_ignored_window_class(class_name: &str) -> bool {
+    matches!(
+        class_name.to_ascii_lowercase().as_str(),
+        "progman"
+            | "workerw"
+            | "shell_traywnd"
+            | "shell_secondarytraywnd"
+            | "tooltips_class32"
+            | "ime"
+            | "msctfime ui"
+            | "sysshadow"
+    )
+}
+
 #[derive(Clone)]
 struct ScreenCapture {
     png: Vec<u8>,
@@ -23,6 +177,7 @@ struct ScreenCapture {
     height: u32,
     x: i32,
     y: i32,
+    window_targets: Vec<WindowTarget>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -75,6 +230,7 @@ pub(crate) struct CapturePayload {
     width: u32,
     height: u32,
     session_id: u64,
+    window_targets: Vec<WindowTarget>,
 }
 
 #[derive(Serialize)]
@@ -765,6 +921,7 @@ pub(crate) fn finish_screenshot(
             height: image.height(),
             x: 0,
             y: 0,
+            window_targets: Vec::new(),
         })?;
     }
     emergency_cancel_screenshot_locked(&app, &manager);
@@ -810,6 +967,7 @@ fn payload(capture: &ScreenCapture, session_id: u64) -> CapturePayload {
         width: capture.width,
         height: capture.height,
         session_id,
+        window_targets: capture.window_targets.clone(),
     }
 }
 
@@ -867,6 +1025,12 @@ fn capture_current_monitor() -> Result<ScreenCapture, String> {
         let width = info.rcMonitor.right - info.rcMonitor.left;
         let height = info.rcMonitor.bottom - info.rcMonitor.top;
         if width <= 0 || height <= 0 { return Err("显示器尺寸无效".into()); }
+        let window_targets = collect_window_targets(DesktopRect {
+            left: info.rcMonitor.left,
+            top: info.rcMonitor.top,
+            right: info.rcMonitor.right,
+            bottom: info.rcMonitor.bottom,
+        });
 
         let screen_dc = GetDC(None);
         if screen_dc.0.is_null() { return Err("无法访问屏幕画面".into()); }
@@ -933,6 +1097,7 @@ fn capture_current_monitor() -> Result<ScreenCapture, String> {
             height: height as u32,
             x: info.rcMonitor.left,
             y: info.rcMonitor.top,
+            window_targets,
         })
     }
 }
@@ -1016,8 +1181,9 @@ fn copy_image_to_clipboard(_image: &DynamicImage) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_png_extension, lock_current_session, should_cancel_unrevealed_session,
-        ScreenshotManager,
+        clip_window_targets, ensure_png_extension, lock_current_session,
+        payload, should_cancel_unrevealed_session, DesktopRect, ScreenCapture, ScreenshotManager,
+        WindowTarget,
     };
     use std::path::PathBuf;
     use std::sync::atomic::Ordering;
@@ -1027,6 +1193,90 @@ mod tests {
     fn save_targets_are_png_files() {
         assert_eq!(ensure_png_extension(PathBuf::from("capture")), PathBuf::from("capture.png"));
         assert_eq!(ensure_png_extension(PathBuf::from("capture.PNG")), PathBuf::from("capture.PNG"));
+    }
+
+    #[test]
+    fn window_targets_are_relative_to_a_negative_coordinate_monitor() {
+        let monitor = DesktopRect { left: -1920, top: -200, right: 0, bottom: 880 };
+        let targets = clip_window_targets(
+            monitor,
+            [DesktopRect { left: -2100, top: -300, right: -200, bottom: 700 }],
+        );
+
+        assert_eq!(
+            targets,
+            vec![WindowTarget { x: 0, y: 0, width: 1720, height: 900 }]
+        );
+    }
+
+    #[test]
+    fn window_targets_are_clipped_to_the_current_monitor() {
+        let monitor = DesktopRect { left: 0, top: 0, right: 1920, bottom: 1080 };
+        let targets = clip_window_targets(
+            monitor,
+            [DesktopRect { left: 1700, top: 100, right: 2200, bottom: 700 }],
+        );
+
+        assert_eq!(
+            targets,
+            vec![WindowTarget { x: 1700, y: 100, width: 220, height: 600 }]
+        );
+    }
+
+    #[test]
+    fn window_targets_drop_empty_intersections() {
+        let monitor = DesktopRect { left: 0, top: 0, right: 1920, bottom: 1080 };
+        let targets = clip_window_targets(
+            monitor,
+            [
+                DesktopRect { left: 40, top: 80, right: 40, bottom: 360 },
+                DesktopRect { left: 1920, top: 40, right: 2200, bottom: 600 },
+                DesktopRect { left: 200, top: 1080, right: 800, bottom: 1400 },
+            ],
+        );
+
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn window_targets_keep_the_enumerator_z_order() {
+        let monitor = DesktopRect { left: 0, top: 0, right: 1920, bottom: 1080 };
+        let targets = clip_window_targets(
+            monitor,
+            [
+                DesktopRect { left: 600, top: 100, right: 1200, bottom: 700 },
+                DesktopRect { left: 2100, top: 100, right: 2400, bottom: 500 },
+                DesktopRect { left: 40, top: 60, right: 480, bottom: 420 },
+            ],
+        );
+
+        assert_eq!(
+            targets,
+            vec![
+                WindowTarget { x: 600, y: 100, width: 600, height: 600 },
+                WindowTarget { x: 40, y: 60, width: 440, height: 360 },
+            ]
+        );
+    }
+
+    #[test]
+    fn capture_payload_serializes_window_targets_in_camel_case() {
+        let capture = ScreenCapture {
+            png: Vec::new(),
+            width: 1920,
+            height: 1080,
+            x: -1920,
+            y: 0,
+            window_targets: vec![WindowTarget { x: 120, y: 80, width: 800, height: 600 }],
+        };
+
+        let value = serde_json::to_value(payload(&capture, 17)).unwrap();
+
+        assert_eq!(
+            value["windowTargets"],
+            serde_json::json!([{ "x": 120, "y": 80, "width": 800, "height": 600 }])
+        );
+        assert!(value.get("window_targets").is_none());
     }
 
     #[test]

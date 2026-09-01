@@ -27,9 +27,12 @@ import {
 } from "../lib/bridge";
 import {
   clampSelection,
+  findWindowTargetAtPoint,
   moveSelection,
   normalizeSelection,
+  projectCaptureRect,
   resizeSelection,
+  snapPointToWindowEdges,
   toolbarTop,
   type Point,
   type ResizeHandle,
@@ -43,7 +46,7 @@ import {
 } from "../lib/screenshotAnnotations";
 
 interface Interaction {
-  mode: "select" | "move" | "resize" | "draw" | "move-action";
+  mode: "pending-select" | "select" | "move" | "resize" | "draw" | "move-action";
   origin: Point;
   initial: ScreenshotRect | null;
   handle?: ResizeHandle;
@@ -54,6 +57,8 @@ interface Interaction {
 }
 
 const HANDLES: ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+const WINDOW_CLICK_DRAG_THRESHOLD = 4;
+const WINDOW_EDGE_SNAP_THRESHOLD = 10;
 const ANNOTATION_MOVE_CURSOR = `url("${annotationMoveCursor}") 16 16, move`;
 const TOOL_BUTTONS: Array<{ tool: DrawingTool; label: string; icon: typeof Rectangle }> = [
   { tool: "rectangle", label: "矩形", icon: Rectangle },
@@ -65,6 +70,12 @@ const TOOL_BUTTONS: Array<{ tool: DrawingTool; label: string; icon: typeof Recta
 ];
 
 const point = (event: ReactPointerEvent): Point => ({ x: event.clientX, y: event.clientY });
+
+const textActionFromDraft = (position: Point | null, value: string): DrawingAction | null => (
+  position && value.trim()
+    ? { tool: "text", start: position, end: position, text: value }
+    : null
+);
 
 function drawAction(
   context: CanvasRenderingContext2D,
@@ -148,6 +159,7 @@ function drawAction(
 export function ScreenshotOverlay() {
   const [capture, setCapture] = useState<ScreenshotCapturePayload | null>(null);
   const [selection, setSelection] = useState<ScreenshotRect | null>(null);
+  const [suggestedSelection, setSuggestedSelection] = useState<ScreenshotRect | null>(null);
   const [activeTool, setActiveTool] = useState<DrawingTool | null>(null);
   const [actions, setActions] = useState<DrawingAction[]>([]);
   const [preview, setPreview] = useState<DrawingAction | null>(null);
@@ -161,12 +173,20 @@ export function ScreenshotOverlay() {
   const rootRef = useRef<HTMLElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const annotationRef = useRef<HTMLCanvasElement>(null);
+  const actionsRef = useRef<DrawingAction[]>([]);
   const interaction = useRef<Interaction | null>(null);
   const previewRef = useRef<DrawingAction | null>(null);
   const actionHistory = useRef<DrawingAction[][]>([]);
+  const composingText = useRef(false);
+  const textDraftRef = useRef<{ id: number; position: Point; value: string } | null>(null);
+  const textDraftSequence = useRef(0);
   const suppressSelectionClick = useRef(false);
   const currentSessionId = useRef<number | null>(null);
   const activatedSessionId = useRef<number | null>(null);
+
+  useEffect(() => {
+    actionsRef.current = actions;
+  }, [actions]);
 
   useEffect(() => {
     let disposed = false;
@@ -196,8 +216,10 @@ export function ScreenshotOverlay() {
       activatedSessionId.current = null;
       setCapture(null);
       setSelection(null);
+      setSuggestedSelection(null);
       setActiveTool(null);
       setActions([]);
+      actionsRef.current = [];
       actionHistory.current = [];
       setPreview(null);
       setHoveredActionIndex(null);
@@ -205,6 +227,8 @@ export function ScreenshotOverlay() {
       interaction.current = null;
       previewRef.current = null;
       suppressSelectionClick.current = false;
+      composingText.current = false;
+      textDraftRef.current = null;
       setTextEditor(null);
       setTextValue("");
       setBusy(false);
@@ -222,8 +246,18 @@ export function ScreenshotOverlay() {
   }, []);
 
   const bounds = { width: window.innerWidth, height: window.innerHeight };
+  const windowTargets = capture
+    ? (capture.windowTargets ?? []).map((target) => projectCaptureRect(target, capture, bounds))
+    : [];
 
   const undoLastAction = () => {
+    if (textDraftRef.current) {
+      composingText.current = false;
+      textDraftRef.current = null;
+      setTextEditor(null);
+      setTextValue("");
+      return;
+    }
     const current = interaction.current;
     if (current?.mode === "move-action" || current?.mode === "draw") interaction.current = null;
     suppressSelectionClick.current = false;
@@ -252,15 +286,20 @@ export function ScreenshotOverlay() {
     context.clearRect(0, 0, canvas.width, canvas.height);
     const sourceScaleX = capture.width / window.innerWidth;
     const sourceScaleY = capture.height / window.innerHeight;
-    for (const action of preview ? [...actions, preview] : actions) {
+    const renderedActions = preview ? [...actions, preview] : [...actions];
+    const draftAction = textEditor ? textActionFromDraft(textEditor, textValue) : null;
+    if (draftAction) renderedActions.push(draftAction);
+    for (const action of renderedActions) {
       drawAction(context, image, action, selection, ratio, ratio, sourceScaleX, sourceScaleY);
     }
-  }, [actions, capture, imageRevision, preview, selection]);
+  }, [actions, capture, imageRevision, preview, selection, textEditor, textValue]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         if (textEditor) {
+          composingText.current = false;
+          textDraftRef.current = null;
           setTextEditor(null);
           setTextValue("");
         } else {
@@ -331,34 +370,68 @@ export function ScreenshotOverlay() {
     const target = event.target as HTMLElement;
     if (target.closest(".screenshot-toolbar") || target.closest(".screenshot-selection")) return;
     const origin = point(event);
-    interaction.current = { mode: "select", origin, initial: null };
-    setSelection({ x: origin.x, y: origin.y, width: 0, height: 0 });
+    const suggested = findWindowTargetAtPoint(windowTargets, origin);
+    interaction.current = suggested
+      ? { mode: "pending-select", origin, initial: suggested }
+      : { mode: "select", origin, initial: null };
+    setSuggestedSelection(suggested);
+    setSelection(suggested ? null : { x: origin.x, y: origin.y, width: 0, height: 0 });
     setActions([]);
+    actionsRef.current = [];
     actionHistory.current = [];
     setPreview(null);
     setHoveredActionIndex(null);
     setDraggingActionIndex(null);
     previewRef.current = null;
     suppressSelectionClick.current = false;
+    composingText.current = false;
+    textDraftRef.current = null;
     setTextEditor(null);
+    setTextValue("");
     rootRef.current?.setPointerCapture(event.pointerId);
+  };
+
+  const openTextDraft = (position: Point) => {
+    composingText.current = false;
+    textDraftRef.current = { id: ++textDraftSequence.current, position, value: "" };
+    setTextEditor(position);
+    setTextValue("");
+  };
+
+  const commitText = (expectedDraftId?: number): DrawingAction[] => {
+    const draft = textDraftRef.current;
+    if (!draft || (expectedDraftId !== undefined && draft.id !== expectedDraftId)) return actionsRef.current;
+    composingText.current = false;
+    textDraftRef.current = null;
+    let nextActions = actionsRef.current;
+    const action = textActionFromDraft(draft.position, draft.value);
+    if (action) {
+      actionHistory.current.push(nextActions);
+      nextActions = [...nextActions, action];
+      actionsRef.current = nextActions;
+      setActions(nextActions);
+    }
+    setTextEditor(null);
+    setTextValue("");
+    return nextActions;
   };
 
   const startInside = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || !selection || busy) return;
     event.stopPropagation();
     const origin = point(event);
-    const actionIndex = findDrawingActionAtPoint(actions, origin);
+    const currentActions = commitText();
+    const actionIndex = findDrawingActionAtPoint(currentActions, origin);
     if (actionIndex !== null) {
       event.preventDefault();
       suppressSelectionClick.current = true;
-      actionHistory.current.push(actions);
+      actionHistory.current.push(currentActions);
       interaction.current = {
         mode: "move-action",
         origin,
         initial: selection,
         actionIndex,
-        initialAction: actions[actionIndex],
+        initialAction: currentActions[actionIndex],
         didMove: false,
       };
       setHoveredActionIndex(actionIndex);
@@ -369,13 +442,12 @@ export function ScreenshotOverlay() {
     suppressSelectionClick.current = false;
     setHoveredActionIndex(null);
     if (activeTool === "text") {
-      setTextEditor(origin);
-      setTextValue("");
+      openTextDraft(origin);
       return;
     }
     if (activeTool) {
       const action: DrawingAction = { tool: activeTool, start: origin, end: origin, points: [origin] };
-      actionHistory.current.push(actions);
+      actionHistory.current.push(currentActions);
       interaction.current = { mode: "draw", origin, initial: selection, tool: activeTool };
       previewRef.current = action;
       setPreview(action);
@@ -393,14 +465,14 @@ export function ScreenshotOverlay() {
     }
     if (activeTool !== "text" || busy || (event.target as HTMLElement).closest(".screenshot-text-editor")) return;
     event.stopPropagation();
-    setTextEditor({ x: event.clientX, y: event.clientY });
-    setTextValue("");
+    openTextDraft({ x: event.clientX, y: event.clientY });
   };
 
   const startResize = (event: ReactPointerEvent<HTMLButtonElement>, handle: ResizeHandle) => {
     if (event.button !== 0 || !selection || busy) return;
     event.preventDefault();
     event.stopPropagation();
+    commitText();
     setHoveredActionIndex(null);
     interaction.current = { mode: "resize", origin: point(event), initial: selection, handle };
     rootRef.current?.setPointerCapture(event.pointerId);
@@ -410,17 +482,29 @@ export function ScreenshotOverlay() {
     const current = interaction.current;
     const next = point(event);
     if (!current) {
+      if (!selection && !busy && !textEditor) {
+        setSuggestedSelection(findWindowTargetAtPoint(windowTargets, next));
+        return;
+      }
       setHoveredActionIndex(selection && !busy && !textEditor
         ? findDrawingActionAtPoint(actions, next)
         : null);
       return;
     }
-    if (current.mode === "select") {
-      setSelection(clampSelection(normalizeSelection(current.origin, next), bounds));
+    const snap = (value: Point) => event.altKey
+      ? value
+      : snapPointToWindowEdges(value, windowTargets, WINDOW_EDGE_SNAP_THRESHOLD);
+    if (current.mode === "pending-select") {
+      if (Math.hypot(next.x - current.origin.x, next.y - current.origin.y) <= WINDOW_CLICK_DRAG_THRESHOLD) return;
+      interaction.current = { ...current, mode: "select", initial: null };
+      setSuggestedSelection(null);
+      setSelection(clampSelection(normalizeSelection(snap(current.origin), snap(next)), bounds));
+    } else if (current.mode === "select") {
+      setSelection(clampSelection(normalizeSelection(snap(current.origin), snap(next)), bounds));
     } else if (current.mode === "move" && current.initial) {
       setSelection(moveSelection(current.initial, { x: next.x - current.origin.x, y: next.y - current.origin.y }, bounds));
     } else if (current.mode === "resize" && current.initial && current.handle) {
-      setSelection(resizeSelection(current.initial, current.handle, next, bounds));
+      setSelection(resizeSelection(current.initial, current.handle, snap(next), bounds));
     } else if (current.mode === "move-action" && current.actionIndex !== undefined && current.initialAction) {
       const delta = { x: next.x - current.origin.x, y: next.y - current.origin.y };
       if (delta.x !== 0 || delta.y !== 0) current.didMove = true;
@@ -443,6 +527,10 @@ export function ScreenshotOverlay() {
     const current = interaction.current;
     interaction.current = null;
     if (rootRef.current?.hasPointerCapture(event.pointerId)) rootRef.current.releasePointerCapture(event.pointerId);
+    if (current?.mode === "pending-select") {
+      setSuggestedSelection(null);
+      setSelection(cancelled ? null : current.initial);
+    }
     if (current?.mode === "move-action") {
       if (cancelled || !current.didMove) {
         const previous = actionHistory.current.pop();
@@ -468,16 +556,7 @@ export function ScreenshotOverlay() {
     setPreview(null);
   };
 
-  const commitText = () => {
-    if (textEditor && textValue.trim()) {
-      actionHistory.current.push(actions);
-      setActions([...actions, { tool: "text", start: textEditor, end: textEditor, text: textValue.trim() }]);
-    }
-    setTextEditor(null);
-    setTextValue("");
-  };
-
-  const renderResult = (): string => {
+  const renderResult = (renderActions: DrawingAction[]): string => {
     if (!selection || !capture || !imageRef.current) throw new Error("请先框选截图区域");
     const sourceScaleX = capture.width / window.innerWidth;
     const sourceScaleY = capture.height / window.innerHeight;
@@ -497,7 +576,7 @@ export function ScreenshotOverlay() {
       canvas.width,
       canvas.height,
     );
-    for (const action of actions) {
+    for (const action of renderActions) {
       drawAction(context, imageRef.current, action, selection, sourceScaleX, sourceScaleY, sourceScaleX, sourceScaleY);
     }
     return canvas.toDataURL("image/png");
@@ -510,7 +589,7 @@ export function ScreenshotOverlay() {
     setBusy(true);
     setError("");
     try {
-      const dataUrl = renderResult();
+      const dataUrl = renderResult(commitText());
       let targetPath: string | null = null;
       if (mode === "save-as") {
         const preferences = await getPreferences();
@@ -547,60 +626,113 @@ export function ScreenshotOverlay() {
     top: toolbarTop(selection, 54, window.innerHeight),
     left: Math.min(window.innerWidth - 12 - toolbarHalf, Math.max(12 + toolbarHalf, selection.x + selection.width / 2)),
   } : null;
+  const maskSelection = selection ?? suggestedSelection;
+  const activeTextDraftId = textDraftRef.current?.id;
+
+  const selectTool = (tool: DrawingTool) => {
+    commitText();
+    setActiveTool((value) => value === tool ? null : tool);
+  };
 
   return (
     <main ref={rootRef} className="screenshot-overlay" onPointerDown={startSelection} onPointerMove={move} onPointerUp={end} onPointerCancel={(event) => end(event, true)}>
       {capture ? <img ref={imageRef} className="screenshot-capture" src={capture.dataUrl} draggable={false} alt="" onLoad={() => revealCapture(capture.sessionId)} /> : null}
-      {selection ? (
+      {suggestedSelection ? (
+        <div
+          className="screenshot-window-suggestion"
+          style={{
+            left: suggestedSelection.x,
+            top: suggestedSelection.y,
+            width: suggestedSelection.width,
+            height: suggestedSelection.height,
+          }}
+          aria-hidden="true"
+        >
+          <output>{Math.round(suggestedSelection.width * (capture?.width ?? window.innerWidth) / window.innerWidth)} × {Math.round(suggestedSelection.height * (capture?.height ?? window.innerHeight) / window.innerHeight)}</output>
+        </div>
+      ) : null}
+      {maskSelection ? (
         <>
-          <div className="screenshot-mask screenshot-mask--top" style={{ height: selection.y }} />
-          <div className="screenshot-mask screenshot-mask--left" style={{ top: selection.y, width: selection.x, height: selection.height }} />
-          <div className="screenshot-mask screenshot-mask--right" style={{ top: selection.y, left: selection.x + selection.width, height: selection.height }} />
-          <div className="screenshot-mask screenshot-mask--bottom" style={{ top: selection.y + selection.height }} />
-          <div
-            className={`screenshot-selection${activeTool ? " is-drawing" : ""}${hoveredActionIndex !== null ? " is-annotation-hovered" : ""}${draggingActionIndex !== null ? " is-moving-annotation" : ""}`}
-            style={{
-              left: selection.x,
-              top: selection.y,
-              width: selection.width,
-              height: selection.height,
-              cursor: draggingActionIndex !== null || hoveredActionIndex !== null ? ANNOTATION_MOVE_CURSOR : undefined,
-            }}
-            onPointerDown={startInside}
-            onClick={openTextEditor}
-          >
-            <canvas ref={annotationRef} />
-            {HANDLES.map((handle) => <button key={handle} type="button" className={`screenshot-handle screenshot-handle--${handle}`} onPointerDown={(event) => startResize(event, handle)} aria-label={`调整 ${handle}`} />)}
-            <output className="screenshot-size">{Math.round(selection.width * (capture?.width ?? window.innerWidth) / window.innerWidth)} × {Math.round(selection.height * (capture?.height ?? window.innerHeight) / window.innerHeight)}</output>
-            {textEditor ? (
-              <textarea
-                className="screenshot-text-editor"
-                style={{ left: textEditor.x - selection.x, top: textEditor.y - selection.y }}
-                value={textValue}
-                onPointerDown={(event) => event.stopPropagation()}
-                onChange={(event) => setTextValue(event.target.value)}
-                onBlur={commitText}
-                onKeyDown={(event) => {
-                  event.stopPropagation();
-                  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); commitText(); }
-                  if (event.key === "Escape") { event.preventDefault(); setTextEditor(null); setTextValue(""); }
+          <div className="screenshot-mask screenshot-mask--top" style={{ height: maskSelection.y }} />
+          <div className="screenshot-mask screenshot-mask--left" style={{ top: maskSelection.y, width: maskSelection.x, height: maskSelection.height }} />
+          <div className="screenshot-mask screenshot-mask--right" style={{ top: maskSelection.y, left: maskSelection.x + maskSelection.width, height: maskSelection.height }} />
+          <div className="screenshot-mask screenshot-mask--bottom" style={{ top: maskSelection.y + maskSelection.height }} />
+          {selection ? (
+            <>
+              <div
+                className={`screenshot-selection${activeTool ? " is-drawing" : ""}${hoveredActionIndex !== null ? " is-annotation-hovered" : ""}${draggingActionIndex !== null ? " is-moving-annotation" : ""}`}
+                style={{
+                  left: selection.x,
+                  top: selection.y,
+                  width: selection.width,
+                  height: selection.height,
+                  cursor: draggingActionIndex !== null || hoveredActionIndex !== null ? ANNOTATION_MOVE_CURSOR : undefined,
                 }}
-                autoFocus
-              />
-            ) : null}
-          </div>
-          {toolbar ? (
-            <nav className="screenshot-toolbar" style={{ left: toolbar.left, top: toolbar.top }} aria-label="截图工具栏">
-              {TOOL_BUTTONS.map(({ tool, label, icon: Icon }) => (
-                <button key={tool} type="button" className={activeTool === tool ? "is-active" : ""} onClick={() => setActiveTool((value) => value === tool ? null : tool)} title={label} aria-label={label}><Icon /></button>
-              ))}
-              <i aria-hidden="true" />
-              <button type="button" onClick={undoLastAction} disabled={actions.length === 0} title="撤销" aria-label="撤销"><ArrowCounterClockwise /></button>
-              <button type="button" className="is-save" onClick={() => void complete("save-as")} disabled={busy} title="另存为" aria-label="另存为"><DownloadSimple /></button>
-              <button type="button" className="is-pin" onClick={() => void complete("pin")} disabled={busy} title="贴图置顶" aria-label="贴图置顶"><PushPin /></button>
-              <button type="button" className="is-cancel" onClick={cancelCurrentScreenshot} title="取消" aria-label="取消"><X /></button>
-              <button type="button" className="is-confirm" onClick={() => void complete("confirm")} disabled={busy} title="完成" aria-label="完成"><Check /></button>
-            </nav>
+                onPointerDown={startInside}
+                onClick={openTextEditor}
+              >
+                <canvas ref={annotationRef} />
+                {HANDLES.map((handle) => <button key={handle} type="button" className={`screenshot-handle screenshot-handle--${handle}`} onPointerDown={(event) => startResize(event, handle)} aria-label={`调整 ${handle}`} />)}
+                <output className="screenshot-size">{Math.round(selection.width * (capture?.width ?? window.innerWidth) / window.innerWidth)} × {Math.round(selection.height * (capture?.height ?? window.innerHeight) / window.innerHeight)}</output>
+                {textEditor ? (
+                  <input
+                    type="text"
+                    className="screenshot-text-editor"
+                    style={{
+                      left: textEditor.x - selection.x,
+                      top: textEditor.y - selection.y,
+                      width: Math.max(1, selection.width - (textEditor.x - selection.x)),
+                      background: "transparent",
+                      borderStyle: "none",
+                      borderWidth: 0,
+                      boxShadow: "none",
+                      color: "transparent",
+                      textShadow: "none",
+                    }}
+                    aria-label="输入截图文字"
+                    value={textValue}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onChange={(event) => {
+                      const draft = textDraftRef.current;
+                      if (draft) textDraftRef.current = { ...draft, value: event.target.value };
+                      setTextValue(event.target.value);
+                    }}
+                    onBlur={() => commitText(activeTextDraftId)}
+                    onCompositionStart={() => { composingText.current = true; }}
+                    onCompositionEnd={() => { composingText.current = false; }}
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
+                      if (event.key === "Enter" && !composingText.current && !event.nativeEvent.isComposing) {
+                        event.preventDefault();
+                        commitText(activeTextDraftId);
+                      }
+                      if (event.key === "Escape" && !composingText.current) {
+                        event.preventDefault();
+                        composingText.current = false;
+                        if (textDraftRef.current?.id === activeTextDraftId) textDraftRef.current = null;
+                        setTextEditor(null);
+                        setTextValue("");
+                      }
+                    }}
+                    spellCheck={false}
+                    autoFocus
+                  />
+                ) : null}
+              </div>
+              {toolbar ? (
+                <nav className="screenshot-toolbar" style={{ left: toolbar.left, top: toolbar.top }} aria-label="截图工具栏">
+                  {TOOL_BUTTONS.map(({ tool, label, icon: Icon }) => (
+                    <button key={tool} type="button" className={activeTool === tool ? "is-active" : ""} onClick={() => selectTool(tool)} title={label} aria-label={label}><Icon /></button>
+                  ))}
+                  <i aria-hidden="true" />
+                  <button type="button" onClick={undoLastAction} disabled={actions.length === 0 && !textEditor} title="撤销" aria-label="撤销"><ArrowCounterClockwise /></button>
+                  <button type="button" className="is-save" onClick={() => void complete("save-as")} disabled={busy} title="另存为" aria-label="另存为"><DownloadSimple /></button>
+                  <button type="button" className="is-pin" onClick={() => void complete("pin")} disabled={busy} title="贴图置顶" aria-label="贴图置顶"><PushPin /></button>
+                  <button type="button" className="is-cancel" onClick={cancelCurrentScreenshot} title="取消" aria-label="取消"><X /></button>
+                  <button type="button" className="is-confirm" onClick={() => void complete("confirm")} disabled={busy} title="完成" aria-label="完成"><Check /></button>
+                </nav>
+              ) : null}
+            </>
           ) : null}
         </>
       ) : <div className="screenshot-mask screenshot-mask--full" />}

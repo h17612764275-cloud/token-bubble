@@ -9,8 +9,15 @@ Token Bubble is derived from **Quota Float** and integrates **CodexScope** for l
 ## Download
 
 - [Download the latest installer](https://github.com/h17612764275-cloud/token-bubble/releases/latest)
-- Current version: `v0.2.5`
+- Current version: `v0.2.6`
 - Windows users should download the `.exe` installer from the Release.
+
+## v0.2.6 smart window selection and inline text update (2026-09-01)
+
+- **Automatic window suggestions:** Hovering highlights the current top-level window, and clicking locks the capture to its bounds. Manual selection and resizing snap to nearby window edges; hold `Alt` to temporarily disable snapping.
+- **Immediate bright preview:** A suggested window returns to full brightness as soon as it is hovered, without showing resize handles or the toolbar before confirmation.
+- **Live inline text:** Every typed character is drawn directly on the screenshot canvas and is preserved on blur, confirmation, Save As, or Pin. Long text entered near an edge now previews exactly as it will export.
+- **Local-only window detection:** Window bounds are processed transiently on the device for the current capture session without reading titles, uploading data, or writing it to disk.
 
 ## v0.2.5 annotation editing and window visibility update (2026-09-01)
 

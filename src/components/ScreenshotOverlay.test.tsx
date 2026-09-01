@@ -2,6 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../styles.css";
 
 const bridge = vi.hoisted(() => ({
   activateScreenshot: vi.fn(async (sessionId: number) => sessionId),
@@ -60,6 +61,16 @@ function expectCustomMoveCursor(element: HTMLElement) {
   expect(element.style.cursor).toContain("url(");
   expect(element.style.cursor).toContain("16 16");
   expect(element.style.cursor).toContain("move");
+}
+
+function mockCaptureWithWindowTargets(windowTargets: Array<{ x: number; y: number; width: number; height: number }>) {
+  bridge.getScreenshotCapture.mockResolvedValue({
+    dataUrl: "data:image/png;base64,cGl4ZWxz",
+    width: 1024,
+    height: 768,
+    sessionId: 1,
+    windowTargets,
+  } as never);
 }
 
 beforeEach(() => {
@@ -331,6 +342,314 @@ describe("ScreenshotOverlay", () => {
     });
 
     expect(screen.queryByRole("navigation", { name: "截图工具栏" })).toBeNull();
+  });
+
+  it("brightens the recommended window without opening the toolbar", async () => {
+    mockCaptureWithWindowTargets([
+      { x: 100, y: 90, width: 320, height: 240 },
+      { x: 130, y: 120, width: 120, height: 100 },
+    ]);
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    fireEvent.pointerMove(screen.getByRole("main"), {
+      buttons: 0,
+      pointerId: 25,
+      clientX: 160,
+      clientY: 150,
+    });
+
+    const suggestion = container.querySelector<HTMLElement>(".screenshot-window-suggestion");
+    expect(suggestion).not.toBeNull();
+    expect(suggestion!.style.left).toBe("100px");
+    expect(suggestion!.style.top).toBe("90px");
+    expect(suggestion!.style.width).toBe("320px");
+    expect(suggestion!.style.height).toBe("240px");
+    expect(container.querySelector(".screenshot-mask--full")).toBeNull();
+    expect(container.querySelector<HTMLElement>(".screenshot-mask--top")!.style.height).toBe("90px");
+    expect(container.querySelector<HTMLElement>(".screenshot-mask--left")!.style.width).toBe("100px");
+    expect(container.querySelector<HTMLElement>(".screenshot-mask--right")!.style.left).toBe("420px");
+    expect(container.querySelector<HTMLElement>(".screenshot-mask--bottom")!.style.top).toBe("330px");
+    expect(screen.queryByRole("navigation", { name: "截图工具栏" })).toBeNull();
+  });
+
+  it("clears a window suggestion when a newer screenshot session loads", async () => {
+    mockCaptureWithWindowTargets([{ x: 100, y: 90, width: 320, height: 240 }]);
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    fireEvent.pointerMove(screen.getByRole("main"), {
+      buttons: 0,
+      pointerId: 34,
+      clientX: 160,
+      clientY: 150,
+    });
+    expect(container.querySelector(".screenshot-window-suggestion")).not.toBeNull();
+
+    bridge.getScreenshotCapture.mockResolvedValueOnce({
+      dataUrl: "data:image/png;base64,bmV3LXdpbmRvdy10YXJnZXRz",
+      width: 1024,
+      height: 768,
+      sessionId: 2,
+      windowTargets: [],
+    } as never);
+    await act(async () => {
+      events.listeners.get("screenshot-capture-ready")?.({ payload: 2 });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(container.querySelector("img")?.getAttribute("src")).toContain("bmV3LXdpbmRvdy10YXJnZXRz"));
+    expect(container.querySelector(".screenshot-window-suggestion")).toBeNull();
+  });
+
+  it("selects the suggested window with a click", async () => {
+    mockCaptureWithWindowTargets([{ x: 100, y: 90, width: 320, height: 240 }]);
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    fireEvent.pointerMove(overlay, {
+      buttons: 0,
+      pointerId: 26,
+      clientX: 160,
+      clientY: 150,
+    });
+    fireEvent.pointerDown(overlay, {
+      button: 0,
+      buttons: 1,
+      pointerId: 26,
+      clientX: 160,
+      clientY: 150,
+    });
+    fireEvent.pointerUp(overlay, {
+      button: 0,
+      buttons: 0,
+      pointerId: 26,
+      clientX: 160,
+      clientY: 150,
+    });
+
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+    expect(selection!.style.left).toBe("100px");
+    expect(selection!.style.top).toBe("90px");
+    expect(selection!.style.width).toBe("320px");
+    expect(selection!.style.height).toBe("240px");
+    expect(await screen.findByRole("navigation", { name: "截图工具栏" })).toBeTruthy();
+  });
+
+  it("keeps the suggested window when pointer movement stays within four pixels", async () => {
+    mockCaptureWithWindowTargets([{ x: 100, y: 90, width: 320, height: 240 }]);
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    fireEvent.pointerDown(overlay, {
+      button: 0,
+      buttons: 1,
+      pointerId: 30,
+      clientX: 160,
+      clientY: 150,
+    });
+    fireEvent.pointerMove(overlay, {
+      buttons: 1,
+      pointerId: 30,
+      clientX: 163,
+      clientY: 150,
+    });
+    fireEvent.pointerUp(overlay, {
+      button: 0,
+      buttons: 0,
+      pointerId: 30,
+      clientX: 163,
+      clientY: 150,
+    });
+
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection!.style.left).toBe("100px");
+    expect(selection!.style.top).toBe("90px");
+    expect(selection!.style.width).toBe("320px");
+    expect(selection!.style.height).toBe("240px");
+  });
+
+  it("switches from a window suggestion to manual selection after dragging four pixels", async () => {
+    mockCaptureWithWindowTargets([{ x: 100, y: 90, width: 320, height: 240 }]);
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    fireEvent.pointerMove(overlay, {
+      buttons: 0,
+      pointerId: 27,
+      clientX: 160,
+      clientY: 150,
+    });
+    fireEvent.pointerDown(overlay, {
+      button: 0,
+      buttons: 1,
+      pointerId: 27,
+      clientX: 160,
+      clientY: 150,
+    });
+    fireEvent.pointerMove(overlay, {
+      buttons: 1,
+      pointerId: 27,
+      clientX: 190,
+      clientY: 180,
+    });
+    fireEvent.pointerUp(overlay, {
+      button: 0,
+      buttons: 0,
+      pointerId: 27,
+      clientX: 190,
+      clientY: 180,
+    });
+
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+    expect(selection!.style.left).toBe("160px");
+    expect(selection!.style.top).toBe("150px");
+    expect(selection!.style.width).toBe("30px");
+    expect(selection!.style.height).toBe("30px");
+  });
+
+  it("snaps both ends of a manual drag to nearby window edges unless Alt is held", async () => {
+    mockCaptureWithWindowTargets([{ x: 100, y: 90, width: 320, height: 240 }]);
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    fireEvent.pointerDown(overlay, {
+      button: 0,
+      buttons: 1,
+      pointerId: 28,
+      clientX: 106,
+      clientY: 96,
+    });
+    fireEvent.pointerMove(overlay, {
+      buttons: 1,
+      pointerId: 28,
+      clientX: 412,
+      clientY: 322,
+    });
+    fireEvent.pointerUp(overlay, {
+      button: 0,
+      buttons: 0,
+      pointerId: 28,
+      clientX: 412,
+      clientY: 322,
+    });
+
+    let selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection!.style.left).toBe("100px");
+    expect(selection!.style.top).toBe("90px");
+    expect(selection!.style.width).toBe("320px");
+    expect(selection!.style.height).toBe("240px");
+
+    fireEvent.pointerDown(overlay, {
+      button: 0,
+      buttons: 1,
+      pointerId: 29,
+      clientX: 106,
+      clientY: 96,
+    });
+    fireEvent.pointerMove(overlay, {
+      altKey: true,
+      buttons: 1,
+      pointerId: 29,
+      clientX: 412,
+      clientY: 322,
+    });
+    fireEvent.pointerUp(overlay, {
+      altKey: true,
+      button: 0,
+      buttons: 0,
+      pointerId: 29,
+      clientX: 412,
+      clientY: 322,
+    });
+
+    selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection!.style.left).toBe("106px");
+    expect(selection!.style.top).toBe("96px");
+    expect(selection!.style.width).toBe("306px");
+    expect(selection!.style.height).toBe("226px");
+  });
+
+  it("snaps resize handles to nearby window edges unless Alt is held", async () => {
+    mockCaptureWithWindowTargets([
+      { x: 100, y: 90, width: 320, height: 240 },
+      { x: 500, y: 90, width: 200, height: 240 },
+    ]);
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    fireEvent.pointerDown(overlay, {
+      button: 0,
+      buttons: 1,
+      pointerId: 31,
+      clientX: 160,
+      clientY: 150,
+    });
+    fireEvent.pointerUp(overlay, {
+      button: 0,
+      buttons: 0,
+      pointerId: 31,
+      clientX: 160,
+      clientY: 150,
+    });
+
+    const eastHandle = screen.getByRole("button", { name: "调整 e" });
+    fireEvent.pointerDown(eastHandle, {
+      button: 0,
+      buttons: 1,
+      pointerId: 32,
+      clientX: 420,
+      clientY: 210,
+    });
+    fireEvent.pointerMove(overlay, {
+      buttons: 1,
+      pointerId: 32,
+      clientX: 492,
+      clientY: 210,
+    });
+    fireEvent.pointerUp(overlay, {
+      button: 0,
+      buttons: 0,
+      pointerId: 32,
+      clientX: 492,
+      clientY: 210,
+    });
+
+    let selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection!.style.width).toBe("400px");
+
+    fireEvent.pointerDown(eastHandle, {
+      button: 0,
+      buttons: 1,
+      pointerId: 33,
+      clientX: 500,
+      clientY: 210,
+    });
+    fireEvent.pointerMove(overlay, {
+      altKey: true,
+      buttons: 1,
+      pointerId: 33,
+      clientX: 492,
+      clientY: 210,
+    });
+    fireEvent.pointerUp(overlay, {
+      altKey: true,
+      button: 0,
+      buttons: 0,
+      pointerId: 33,
+      clientX: 492,
+      clientY: 210,
+    });
+
+    selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection!.style.width).toBe("392px");
   });
 
   it("shows the custom move cursor over a completed annotation while its drawing tool stays active", async () => {
@@ -673,6 +992,337 @@ describe("ScreenshotOverlay", () => {
     });
     fireEvent.click(selection!, { clientX: 95, clientY: 90 });
 
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("shows typed text directly without a visible editor surface", async () => {
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    selectRegion(overlay, 80);
+    fireEvent.click(await screen.findByRole("button", { name: "文字" }));
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 81,
+      clientX: 60,
+      clientY: 60,
+    });
+    const editor = await screen.findByRole("textbox");
+
+    fireEvent.change(editor, { target: { value: "逐字显示" } });
+    expect((editor as HTMLInputElement).value).toBe("逐字显示");
+    const style = window.getComputedStyle(editor);
+    const inlineStyle = editor.getAttribute("style") ?? "";
+    expect(style.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(inlineStyle).toContain("border-width: 0px");
+    expect(inlineStyle).toContain("box-shadow: none");
+    expect(style.color).toBe("rgba(0, 0, 0, 0)");
+  });
+
+  it("keeps a long inline text preview aligned with the exported result near the right edge", async () => {
+    const annotationFillText = vi.fn();
+    const exportFillText = vi.fn();
+    const contextFor = (fillText: ReturnType<typeof vi.fn>) => ({
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      fillText,
+      restore: vi.fn(),
+      save: vi.fn(),
+    });
+    const annotationContext = contextFor(annotationFillText);
+    const exportContext = contextFor(exportFillText);
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+      configurable: true,
+      value: vi.fn(function (this: HTMLCanvasElement) {
+        return this.isConnected ? annotationContext : exportContext;
+      }),
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/png;base64,bG9uZy10ZXh0");
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    selectRegion(overlay, 92);
+    fireEvent.click(await screen.findByRole("button", { name: "文字" }));
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 93,
+      clientX: 205,
+      clientY: 60,
+    });
+    const editor = await screen.findByRole("textbox");
+    const longText = "这是一段会超过选区右边缘的长文字内容";
+    fireEvent.change(editor, { target: { value: longText } });
+
+    await waitFor(() => expect(annotationFillText).toHaveBeenCalledWith(longText, expect.any(Number), expect.any(Number)));
+    const previewCall = annotationFillText.mock.calls.at(-1);
+    fireEvent.click(screen.getByRole("button", { name: "完成" }));
+
+    await waitFor(() => expect(bridge.finishScreenshot).toHaveBeenCalledOnce());
+    expect(exportFillText).toHaveBeenCalledWith(...previewCall!);
+  });
+
+  it("includes text in the exported screenshot without requiring Enter", async () => {
+    const annotationFillText = vi.fn();
+    const exportFillText = vi.fn();
+    const contextFor = (fillText: ReturnType<typeof vi.fn>) => ({
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      fillText,
+      restore: vi.fn(),
+      save: vi.fn(),
+    });
+    const annotationContext = contextFor(annotationFillText);
+    const exportContext = contextFor(exportFillText);
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+      configurable: true,
+      value: vi.fn(function (this: HTMLCanvasElement) {
+        return this.isConnected ? annotationContext : exportContext;
+      }),
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/png;base64,dGV4dA==");
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    selectRegion(overlay, 82);
+    fireEvent.click(await screen.findByRole("button", { name: "文字" }));
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 83,
+      clientX: 60,
+      clientY: 60,
+    });
+    const editor = await screen.findByRole("textbox");
+    fireEvent.change(editor, { target: { value: "不按回车也保留" } });
+    fireEvent.click(screen.getByRole("button", { name: "完成" }));
+
+    await waitFor(() => expect(bridge.finishScreenshot).toHaveBeenCalledOnce());
+    expect(exportFillText).toHaveBeenCalledTimes(1);
+    expect(exportFillText).toHaveBeenCalledWith("不按回车也保留", expect.any(Number), expect.any(Number));
+  });
+
+  it("exports inline text once when blur happens before the complete click", async () => {
+    const exportFillText = vi.fn();
+    const contextFor = (fillText = vi.fn()) => ({
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      fillText,
+      restore: vi.fn(),
+      save: vi.fn(),
+    });
+    const annotationContext = contextFor();
+    const exportContext = contextFor(exportFillText);
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+      configurable: true,
+      value: vi.fn(function (this: HTMLCanvasElement) {
+        return this.isConnected ? annotationContext : exportContext;
+      }),
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/png;base64,Ymx1cg==");
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    selectRegion(overlay, 86);
+    fireEvent.click(await screen.findByRole("button", { name: "文字" }));
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 87,
+      clientX: 60,
+      clientY: 60,
+    });
+    const editor = await screen.findByRole("textbox");
+    fireEvent.change(editor, { target: { value: "只导出一次" } });
+    const completeButton = screen.getByRole("button", { name: "完成" });
+    act(() => {
+      fireEvent.blur(editor);
+      fireEvent.click(completeButton);
+    });
+
+    await waitFor(() => expect(bridge.finishScreenshot).toHaveBeenCalledOnce());
+    expect(exportFillText).toHaveBeenCalledTimes(1);
+    expect(exportFillText).toHaveBeenCalledWith("只导出一次", expect.any(Number), expect.any(Number));
+  });
+
+  it("keeps the first text and opens a fresh editor when the user clicks a second position", async () => {
+    const fillText = vi.fn();
+    const context = {
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      fillText,
+      restore: vi.fn(),
+      save: vi.fn(),
+    };
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+      configurable: true,
+      value: vi.fn(() => context),
+    });
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    selectRegion(overlay, 88);
+    fireEvent.click(await screen.findByRole("button", { name: "文字" }));
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 89,
+      clientX: 60,
+      clientY: 60,
+    });
+    const firstEditor = await screen.findByRole("textbox");
+    fireEvent.change(firstEditor, { target: { value: "第一段" } });
+    const firstLeft = (firstEditor as HTMLElement).style.left;
+    fillText.mockClear();
+
+    act(() => {
+      fireEvent.pointerDown(selection!, {
+        button: 0,
+        buttons: 1,
+        pointerId: 90,
+        clientX: 130,
+        clientY: 90,
+      });
+      fireEvent.blur(firstEditor);
+    });
+
+    const secondEditor = screen.getByRole("textbox");
+    expect((secondEditor as HTMLElement).style.left).not.toBe(firstLeft);
+    expect((secondEditor as HTMLInputElement).value).toBe("");
+    await waitFor(() => expect(fillText).toHaveBeenCalledWith("第一段", expect.any(Number), expect.any(Number)));
+  });
+
+  it("keeps a text draft when the next click selects an existing annotation", async () => {
+    const exportFillText = vi.fn();
+    const contextFor = (fillText = vi.fn()) => ({
+      beginPath: vi.fn(),
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      fillText,
+      restore: vi.fn(),
+      save: vi.fn(),
+      stroke: vi.fn(),
+      strokeRect: vi.fn(),
+    });
+    const annotationContext = contextFor();
+    const exportContext = contextFor(exportFillText);
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+      configurable: true,
+      value: vi.fn(function (this: HTMLCanvasElement) {
+        return this.isConnected ? annotationContext : exportContext;
+      }),
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/png;base64,aGlzdG9yeQ==");
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    selectRegion(overlay, 91);
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+
+    fireEvent.click(await screen.findByRole("button", { name: "矩形" }));
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 92,
+      clientX: 60,
+      clientY: 60,
+    });
+    fireEvent.pointerMove(overlay, {
+      buttons: 1,
+      pointerId: 92,
+      clientX: 120,
+      clientY: 100,
+    });
+    fireEvent.pointerUp(overlay, {
+      button: 0,
+      buttons: 0,
+      pointerId: 92,
+      clientX: 120,
+      clientY: 100,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "文字" }));
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 93,
+      clientX: 160,
+      clientY: 120,
+    });
+    const editor = await screen.findByRole("textbox");
+    fireEvent.change(editor, { target: { value: "不能被旧快照删除" } });
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 94,
+      clientX: 60,
+      clientY: 80,
+    });
+    fireEvent.pointerUp(overlay, {
+      button: 0,
+      buttons: 0,
+      pointerId: 94,
+      clientX: 60,
+      clientY: 80,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "完成" }));
+
+    await waitFor(() => expect(bridge.finishScreenshot).toHaveBeenCalledOnce());
+    expect(exportFillText).toHaveBeenCalledTimes(1);
+    expect(exportFillText).toHaveBeenCalledWith("不能被旧快照删除", expect.any(Number), expect.any(Number));
+  });
+
+  it("keeps the inline editor open when Enter confirms a Chinese IME composition", async () => {
+    const { container } = render(<ScreenshotOverlay />);
+
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+    const overlay = screen.getByRole("main");
+    selectRegion(overlay, 84);
+    fireEvent.click(await screen.findByRole("button", { name: "文字" }));
+    const selection = container.querySelector<HTMLElement>(".screenshot-selection");
+    expect(selection).not.toBeNull();
+
+    fireEvent.pointerDown(selection!, {
+      button: 0,
+      buttons: 1,
+      pointerId: 85,
+      clientX: 60,
+      clientY: 60,
+    });
+    const editor = await screen.findByRole("textbox");
+    fireEvent.compositionStart(editor);
+    fireEvent.change(editor, { target: { value: "输入" } });
+    fireEvent.keyDown(editor, { key: "Enter" });
+
+    expect(screen.getByRole("textbox")).toBe(editor);
+    expect((editor as HTMLInputElement).value).toBe("输入");
+
+    fireEvent.compositionEnd(editor);
+    fireEvent.keyDown(editor, { key: "Enter" });
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 

@@ -8,7 +8,7 @@ Token Bubble is designed to be local-first and minimal.
 - The app sends the existing Codex access token only to the ChatGPT quota endpoints needed to read Codex usage.
 - The app may read the account identifier from the login file or token payload only to set the request header expected by the quota service.
 - When voice input is enabled, the app reads audio from the selected microphone for on-device speech recognition.
-- When the user starts a screenshot, the app reads the current monitor pixels to provide local region selection and annotation.
+- When the user starts a screenshot, the app reads the current monitor pixels and briefly enumerates visible top-level window process IDs, class names, and bounds to recommend local region selection and edge snapping.
 
 ## What It Stores
 
@@ -34,6 +34,10 @@ Screenshot pixels are held locally for the active capture and pinned-image
 session. Confirmed screenshots are written only to the selected local folder
 or save path and copied to the system clipboard. Token Bubble does not upload
 screenshots.
+
+Window process IDs and class names used during screenshot target filtering are
+not retained. Only the resulting window bounds remain in the active local
+screenshot session; they are not written to disk or uploaded.
 
 ## What It Sends
 

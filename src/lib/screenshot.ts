@@ -8,11 +8,75 @@ export interface ScreenshotRect extends Point {
   height: number;
 }
 
+export interface ScreenshotSize {
+  width: number;
+  height: number;
+}
+
 export type ResizeHandle = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
 
 export const MIN_SELECTION_SIZE = 24;
 
 const clamp = (value: number, minimum: number, maximum: number) => Math.min(maximum, Math.max(minimum, value));
+
+export function projectCaptureRect(
+  rect: ScreenshotRect,
+  captureSize: ScreenshotSize,
+  viewportSize: ScreenshotSize,
+): ScreenshotRect {
+  const scaleX = viewportSize.width / captureSize.width;
+  const scaleY = viewportSize.height / captureSize.height;
+  return {
+    x: rect.x * scaleX,
+    y: rect.y * scaleY,
+    width: rect.width * scaleX,
+    height: rect.height * scaleY,
+  };
+}
+
+export function findWindowTargetAtPoint(targets: ScreenshotRect[], point: Point): ScreenshotRect | null {
+  return targets.find((target) => (
+    target.width > 0
+    && target.height > 0
+    && point.x >= target.x
+    && point.x <= target.x + target.width
+    && point.y >= target.y
+    && point.y <= target.y + target.height
+  )) ?? null;
+}
+
+export function snapPointToWindowEdges(point: Point, targets: ScreenshotRect[], threshold: number): Point {
+  let x = point.x;
+  let y = point.y;
+  let closestXDistance = Number.POSITIVE_INFINITY;
+  let closestYDistance = Number.POSITIVE_INFINITY;
+
+  for (const target of targets) {
+    if (target.width <= 0 || target.height <= 0) continue;
+
+    if (point.y >= target.y - threshold && point.y <= target.y + target.height + threshold) {
+      for (const edge of [target.x, target.x + target.width]) {
+        const distance = Math.abs(point.x - edge);
+        if (distance <= threshold && distance < closestXDistance) {
+          x = edge;
+          closestXDistance = distance;
+        }
+      }
+    }
+
+    if (point.x >= target.x - threshold && point.x <= target.x + target.width + threshold) {
+      for (const edge of [target.y, target.y + target.height]) {
+        const distance = Math.abs(point.y - edge);
+        if (distance <= threshold && distance < closestYDistance) {
+          y = edge;
+          closestYDistance = distance;
+        }
+      }
+    }
+  }
+
+  return { x, y };
+}
 
 export function normalizeSelection(start: Point, end: Point): ScreenshotRect {
   return {

@@ -214,6 +214,7 @@ export interface ScreenshotCapturePayload {
   width: number;
   height: number;
   sessionId: number;
+  windowTargets?: Array<{ x: number; y: number; width: number; height: number }>;
 }
 
 export async function beginScreenshot(): Promise<void> {
@@ -242,7 +243,7 @@ export async function getScreenshotCapture(expectedSessionId?: number): Promise<
     glow.addColorStop(1, "rgba(26,34,80,0)");
     context.fillStyle = glow;
     context.fillRect(120, 40, 1000, 800);
-    return { dataUrl: canvas.toDataURL("image/png"), width, height, sessionId: 0 };
+    return { dataUrl: canvas.toDataURL("image/png"), width, height, sessionId: 0, windowTargets: [] };
   }
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<ScreenshotCapturePayload>("get_screenshot_capture", {
