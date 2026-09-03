@@ -50,10 +50,9 @@ jobs:
           releaseBody: |
             ## What's new
 
-            - Lets you hover and drag existing rectangles, ellipses, arrows, freehand strokes, mosaic regions, and text, even while the original drawing tool remains selected; cancelling or undoing a move restores the previous position without deleting another annotation.
-            - Adds a lightweight glass, pink-to-purple four-way movement cursor with a visually centered concentric core.
-            - Makes Hide dismiss both the quota widget and tray panel, including repeated-click, focus-change, and asynchronous state races that could leave the panel visible or unclosable.
-            - Keeps the screenshot startup, session isolation, finish-transition, and fresh-tool-state fixes from v0.2.3 and v0.2.4.
+            - Uses cloud height alone to represent remaining quota, keeping non-empty clouds equally white and dense instead of exposing more of the gray base at lower levels.
+            - Brightens the cloud layer, increases its coverage, and tightens the top fade so values such as 44% stay easier to read.
+            - Preserves the soft pink-purple glass appearance while improving contrast and edge clarity.
 
             ![Token Bubble panel](https://raw.githubusercontent.com/h17612764275-cloud/token-bubble/main/docs/images/token-bubble-panel.png)
 

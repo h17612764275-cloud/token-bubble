@@ -9,8 +9,13 @@ Token Bubble is derived from **Quota Float** and integrates **CodexScope** for l
 ## Download
 
 - [Download the latest installer](https://github.com/h17612764275-cloud/token-bubble/releases/latest)
-- Current version: `v0.2.6`
+- Current version: `v0.2.7`
 - Windows users should download the `.exe` installer from the Release.
+
+## v0.2.7 cloud clarity update (2026-09-03)
+
+- **Easier-to-read remaining quota:** Cloud height alone now represents the remaining quota; lower levels no longer reduce cloud density or opacity and expose too much of the gray base.
+- **Brighter, clearer clouds:** Increased cloud brightness and coverage with a tighter top fade, while preserving the pink-purple glass appearance and soft edges.
 
 ## v0.2.6 smart window selection and inline text update (2026-09-01)
 
