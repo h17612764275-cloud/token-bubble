@@ -8,9 +8,17 @@ Token Bubble 基于 **Quota Float** 开发，并集成 **CodexScope** 的本地�
 
 ## 下载
 
-- [下载最新版安装包](https://github.com/h17612764275-cloud/token-bubble/releases/latest)
+- [下载最新版 Windows 安装包](https://github.com/h17612764275-cloud/token-bubble/releases/download/v0.2.7/Token-Bubble_0.2.7_x64-setup.exe)
 - 当前版本：`v0.2.7`
 - Windows 用户下载 Release 中的 `.exe` 安装包。
+
+## v0.2.7 浮窗交互更新（2026-09-07）
+
+- **单击查看 Spark 余额**：有 Spark 额度数据时，单击 Bubble 浮窗可切换查看 Spark 本周剩余额度；数字在原位用约 1 秒的失焦、重新对焦动效完成切换。
+- **5 秒后自动返回**：Spark 数字完整显示 5 秒后，以相同动效返回 Codex 余额。
+- **保留原有操作**：双击打开完整面板，拖拽移动浮窗。
+
+本次更新的是 Windows 安装包；仓库源码及 `v0.2.7` 标签源码本轮未同步上述功能，按源码构建不会得到此次安装包的全部交互更新。
 
 ## v0.2.7 云层清晰度更新（2026-09-03）
 
@@ -83,7 +91,7 @@ Bubble 和 Glass 两款面板都支持取色换色。打开取色器后，可以
 
 ### 浮窗样式
 
-浮窗会匹配 Bubble 或 Glass 皮肤，可调整尺寸、固定位置并保持置顶。点击浮窗可以打开完整面板。
+浮窗会匹配 Bubble 或 Glass 皮肤，可调整尺寸、固定位置并保持置顶。双击浮窗可打开完整面板；有 Spark 额度数据时，单击 Bubble 浮窗可切换 Codex 与 Spark 余额。
 
 | Bubble 浮窗 | Glass 浮窗 |
 | --- | --- |
@@ -115,6 +123,7 @@ Bubble 和 Glass 两款面板都支持取色换色。打开取色器后，可以
 
 1. 安装并启动 Token Bubble。
 2. 确保本机 Codex Desktop 已登录。
+   有 Spark 额度数据时，单击 Bubble 浮窗查看 Spark 本周余额，完整显示 5 秒后自动返回；双击打开面板，拖拽移动浮窗。
 3. 点击面板中的用量范围，在今日、近7天和近30天之间切换。
 4. 使用右侧控制按钮切换 Bubble/Glass 皮肤、打开取色器、调整尺寸或固定浮窗。
 5. 点击顶部续费日期设置会员续费时间。
